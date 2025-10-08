@@ -39,6 +39,7 @@ class RLArgs:
     max_new_tokens: int = 64
     temperature: float = 0.7
     seed: int = 42
+    gradient_checkpointing: bool = False
 
 
 def set_seed(seed: int) -> None:
@@ -222,6 +223,7 @@ def main():
         model_id=args_ns.model_id,
         min_visual_tokens=args_ns.min_visual_tokens,
         max_visual_tokens=args_ns.max_visual_tokens,
+        gradient_checkpointing=args_ns.gradient_checkpointing,
     )
 
     set_seed(args.seed)
