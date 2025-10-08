@@ -131,6 +131,7 @@ def reinforce_step(model, processor, device, batch, args: RLArgs, optimizer):
             max_new_tokens=args.max_new_tokens,
             do_sample=True,
             temperature=args.temperature,
+            use_cache=False,
         )
 
     # trim prompt tokens
@@ -201,6 +202,9 @@ def main():
     parser.add_argument("--max_new_tokens", type=int, default=64)
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--model_id", type=str, default="showlab/ShowUI-2B")
+    parser.add_argument("--min_visual_tokens", type=int, default=256)
+    parser.add_argument("--max_visual_tokens", type=int, default=896)
+    parser.add_argument("--gradient_checkpointing", action="store_true")
     args_ns = parser.parse_args()
 
     args = RLArgs(
@@ -216,6 +220,8 @@ def main():
         max_new_tokens=args_ns.max_new_tokens,
         temperature=args_ns.temperature,
         model_id=args_ns.model_id,
+        min_visual_tokens=args_ns.min_visual_tokens,
+        max_visual_tokens=args_ns.max_visual_tokens,
     )
 
     set_seed(args.seed)
@@ -232,6 +238,11 @@ def main():
     # Load model on this rank's device (avoid auto-sharding when using DDP)
     model = Qwen2VLForConditionalGeneration.from_pretrained(args.model_id, torch_dtype=torch_dtype)
     model.to(device)
+    if args.gradient_checkpointing:
+        try:
+            model.gradient_checkpointing_enable()
+        except Exception:
+            pass
     if is_distributed and world_size > 1:
         model = DDP(model, device_ids=[local_rank] if torch.cuda.is_available() else None)
 
