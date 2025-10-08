@@ -44,19 +44,39 @@ def normalize_bbox(bbox, size):
     y2_norm = y2 / height
     return [x1_norm, y1_norm, x2_norm, y2_norm]
 
-dataset_dir = "/home/qinghong/data/GUI_database/AMEX/"
+dataset_dir_default = os.path.join(os.path.expanduser("~"), "showui_data", "AMEX")
 
 def main(split="name"):
-    parser = argparse.ArgumentParser(description="Example of argparse usage.")
+    parser = argparse.ArgumentParser(description="Prepare AMEX metadata")
+    parser.add_argument(
+        "--dataset_dir",
+        default=dataset_dir_default,
+        help="Path to AMEX dataset root (contains images/ and element_anno/ or AMEX/element_anno)",
+    )
     parser.add_argument(
         "--web_imgs",
-        default=f"{dataset_dir}/images",
-        help="Path to the directory containing web images.",
-    )
-    element_anno_path = (
-        f"{dataset_dir}/AMEX/element_anno"
+        default=None,
+        help="Path to images directory (defaults to dataset_dir/images or dataset_dir/AMEX/images)",
     )
     args = parser.parse_args()
+
+    # Resolve images directory with fallback
+    if args.web_imgs is None:
+        cand_images = [
+            os.path.join(args.dataset_dir, "images"),
+            os.path.join(args.dataset_dir, "AMEX", "images"),
+        ]
+        args.web_imgs = next((p for p in cand_images if os.path.isdir(p)), cand_images[0])
+
+    # Resolve element_anno path with fallback
+    cand_annos = [
+        os.path.join(args.dataset_dir, "element_anno"),
+        os.path.join(args.dataset_dir, "AMEX", "element_anno"),
+    ]
+    element_anno_path = next((p for p in cand_annos if os.path.isdir(p)), None)
+    if element_anno_path is None:
+        raise FileNotFoundError(f"Could not find element_anno in any of: {cand_annos}")
+
     meta_data_path_list = os.listdir(element_anno_path)
 
     annotation_json = dict()  # annotation_data: dict
@@ -159,7 +179,7 @@ def main(split="name"):
         img_data = screen_list[img_filename]
         data_list.append(img_data)
 
-    save_url = rf"{dataset_dir}/metadata/hf_train_{split}.json"
+    save_url = os.path.join(args.dataset_dir, "metadata", f"hf_train_{split}.json")
     os.makedirs(os.path.dirname(save_url), exist_ok=True)
     with open(save_url, "w") as f:
         json.dump(data_list, f, indent=4)

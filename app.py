@@ -34,15 +34,18 @@ for file in files:
     file_path = hf_hub_download(repo_id=model_repo, filename=file, local_dir=destination_folder)
     print(f"Downloaded {file} to {file_path}")
 
+# Choose device and dtype with CPU/GPU fallback
+device = "cuda" if torch.cuda.is_available() else "cpu"
+torch_dtype = torch.bfloat16 if device == "cuda" else torch.float32
+
 model = Qwen2VLForConditionalGeneration.from_pretrained(
     "./showui-2b",
-    # "showlab/ShowUI-2B",
-    torch_dtype=torch.bfloat16,
-    device_map="cpu",
+    torch_dtype=torch_dtype,
+    device_map="auto",
 )
 
-# Load the processor
-processor = AutoProcessor.from_pretrained("Qwen/Qwen2-VL-2B-Instruct", min_pixels=MIN_PIXELS, max_pixels=MAX_PIXELS)
+# Load the processor (align with the same model repo)
+processor = AutoProcessor.from_pretrained("./showui-2b", min_pixels=MIN_PIXELS, max_pixels=MAX_PIXELS)
 
 # Helper functions
 def draw_point(image_input, point=None, radius=5):
@@ -87,7 +90,7 @@ def run_showui(image, query):
 
     global model
 
-    model = model.to("cuda")
+    model = model.to(device)
     
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     image_inputs, video_inputs = process_vision_info(messages)
@@ -98,7 +101,7 @@ def run_showui(image, query):
         padding=True,
         return_tensors="pt"
     )
-    inputs = inputs.to("cuda")
+    inputs = inputs.to(device)
 
     # Generate output
     generated_ids = model.generate(**inputs, max_new_tokens=128)
