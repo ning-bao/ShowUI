@@ -8,12 +8,14 @@ from dataclasses import dataclass
 from typing import List, Tuple
 
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 from torch.optim import AdamW
 from PIL import Image
 from tqdm import tqdm
 
 from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 from data.dset_shared_grounding import dataset_mapping
 from data.template.shared_grounding import grounding_to_qwen
@@ -43,6 +45,22 @@ def set_seed(seed: int) -> None:
     random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+
+
+def init_distributed() -> Tuple[int, int, int, bool]:
+    """Initialize torch.distributed if launched with torchrun/deepspeed.
+    Returns (local_rank, world_size, global_rank, is_distributed).
+    """
+    if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+        global_rank = int(os.environ["RANK"])  # global rank
+        world_size = int(os.environ["WORLD_SIZE"])  # total processes
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        if not dist.is_initialized():
+            dist.init_process_group(backend="nccl" if torch.cuda.is_available() else "gloo")
+        if torch.cuda.is_available():
+            torch.cuda.set_device(local_rank)
+        return local_rank, world_size, global_rank, True
+    return 0, 1, 0, False
 
 
 def load_split_items(dataset_dir: str, dataset: str, split: str) -> Tuple[str, List[dict]]:
@@ -202,26 +220,33 @@ def main():
 
     set_seed(args.seed)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    torch_dtype = torch.bfloat16 if device == "cuda" else torch.float32
+    # Distributed setup
+    local_rank, world_size, global_rank, is_distributed = init_distributed()
+    device = f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu"
+    torch_dtype = torch.bfloat16 if device.startswith("cuda") else torch.float32
 
     min_pixels = args.min_visual_tokens * 28 * 28
     max_pixels = args.max_visual_tokens * 28 * 28
 
     processor = AutoProcessor.from_pretrained(args.model_id, min_pixels=min_pixels, max_pixels=max_pixels)
-    model = Qwen2VLForConditionalGeneration.from_pretrained(args.model_id, torch_dtype=torch_dtype, device_map="auto")
+    # Load model on this rank's device (avoid auto-sharding when using DDP)
+    model = Qwen2VLForConditionalGeneration.from_pretrained(args.model_id, torch_dtype=torch_dtype)
+    model.to(device)
+    if is_distributed and world_size > 1:
+        model = DDP(model, device_ids=[local_rank] if torch.cuda.is_available() else None)
 
     optimizer = AdamW(model.parameters(), lr=args.lr)
 
     img_dir, samples = load_split_items(args.dataset_dir, args.train_dataset, args.train_json)
-    print(f"Loaded {len(samples)} samples from {args.train_dataset}/{args.train_json}")
+    if global_rank == 0:
+        print(f"Loaded {len(samples)} samples from {args.train_dataset}/{args.train_json}")
 
     for epoch in range(args.epochs):
         running_loss = 0.0
         running_reward = 0.0
         start = time.time()
 
-        pbar = tqdm(range(args.steps_per_epoch), desc=f"Epoch {epoch+1}/{args.epochs}")
+        pbar = tqdm(range(args.steps_per_epoch), desc=f"Epoch {epoch+1}/{args.epochs}", disable=(global_rank != 0))
         for _ in pbar:
             batch_items = []
             for _ in range(args.batch_size):
@@ -240,23 +265,31 @@ def main():
             loss, reward = reinforce_step(model, processor, device, batch_items, args, optimizer)
             running_loss += loss
             running_reward += reward
-            pbar.set_postfix({"loss": f"{loss:.4f}", "reward": f"{reward:.3f}"})
+            if global_rank == 0:
+                pbar.set_postfix({"loss": f"{loss:.4f}", "reward": f"{reward:.3f}"})
 
         duration = time.time() - start
-        print(f"Epoch {epoch+1} done in {duration:.1f}s | avg loss {running_loss/args.steps_per_epoch:.4f} | avg reward {running_reward/args.steps_per_epoch:.3f}")
+        if global_rank == 0:
+            print(f"Epoch {epoch+1} done in {duration:.1f}s | avg loss {running_loss/args.steps_per_epoch:.4f} | avg reward {running_reward/args.steps_per_epoch:.3f}")
 
-    # save LoRA or full model – avoid DeepSpeed unwrap import issues
-    save_dir = os.path.join(os.getcwd(), "rl_ckpt")
-    os.makedirs(save_dir, exist_ok=True)
-    try:
-        model.save_pretrained(save_dir)
-    except Exception as e:
-        print(f"Standard save_pretrained failed ({e}); falling back to raw state_dict save")
-        torch.save(model.state_dict(), os.path.join(save_dir, "pytorch_model.bin"))
-        # also persist config
-        model.config.to_json_file(os.path.join(save_dir, "config.json"))
-    processor.save_pretrained(save_dir)
-    print(f"Saved RL checkpoint to {save_dir}")
+    # save (rank 0 only) – avoid DeepSpeed unwrap issues
+    if (not is_distributed) or (global_rank == 0):
+        save_dir = os.path.join(os.getcwd(), "rl_ckpt")
+        os.makedirs(save_dir, exist_ok=True)
+        model_to_save = model.module if hasattr(model, "module") else model
+        try:
+            # Prefer state_dict to avoid any unwrap imports
+            torch.save(model_to_save.state_dict(), os.path.join(save_dir, "pytorch_model.bin"))
+            model_to_save.config.to_json_file(os.path.join(save_dir, "config.json"))
+        except Exception as e:
+            print(f"Fallback save failed: {e}")
+        processor.save_pretrained(save_dir)
+        print(f"Saved RL checkpoint to {save_dir}")
+
+    # cleanup
+    if is_distributed and dist.is_initialized():
+        dist.barrier()
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":
