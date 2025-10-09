@@ -44,6 +44,9 @@ class RLArgs:
     eval_subset_limit: int = 200
     eval_every_steps: int = 200
     save_every_epochs: int = 1
+    resume_from: str = ""
+    save_optimizer: bool = True
+    eval_split: str = "hf_test_full"
 
 
 def set_seed(seed: int) -> None:
@@ -266,6 +269,9 @@ def main():
     parser.add_argument("--eval_subset_limit", type=int, default=200)
     parser.add_argument("--eval_every_steps", type=int, default=200)
     parser.add_argument("--save_every_epochs", type=int, default=1)
+    parser.add_argument("--resume_from", type=str, default="", help="Resume from checkpoint directory")
+    parser.add_argument("--save_optimizer", action="store_true")
+    parser.add_argument("--eval_split", type=str, default="hf_test_full")
     args_ns = parser.parse_args()
 
     args = RLArgs(
@@ -289,6 +295,9 @@ def main():
         eval_subset_limit=args_ns.eval_subset_limit,
         eval_every_steps=args_ns.eval_every_steps,
         save_every_epochs=args_ns.save_every_epochs,
+        resume_from=args_ns.resume_from,
+        save_optimizer=args_ns.save_optimizer,
+        eval_split=args_ns.eval_split,
     )
 
     set_seed(args.seed)
@@ -322,6 +331,29 @@ def main():
 
     optimizer = AdamW(model.parameters(), lr=args.lr)
 
+    # Resume support
+    start_epoch = 0
+    global_step = 0
+    if args.resume_from:
+        try:
+            state_path = os.path.join(args.resume_from, "optimizer.pt")
+            meta_path = os.path.join(args.resume_from, "training_state.json")
+            if os.path.exists(state_path):
+                optimizer.load_state_dict(torch.load(state_path, map_location="cpu"))
+            if os.path.exists(meta_path):
+                with open(meta_path) as f:
+                    meta = json.load(f)
+                start_epoch = int(meta.get("epoch", 0))
+                global_step = int(meta.get("global_step", 0))
+            # Load model weights
+            model_to_load = model
+            if os.path.exists(os.path.join(args.resume_from, "pytorch_model.bin")):
+                sd = torch.load(os.path.join(args.resume_from, "pytorch_model.bin"), map_location="cpu")
+                model_to_load.load_state_dict(sd, strict=False)
+            print(f"Resumed from {args.resume_from} at epoch {start_epoch}, step {global_step}")
+        except Exception as e:
+            print(f"Resume failed: {e}")
+
     img_dir, samples = load_split_items(args.dataset_dir, args.train_dataset, args.train_json)
     if global_rank == 0:
         print(f"Loaded {len(samples)} samples from {args.train_dataset}/{args.train_json}")
@@ -331,8 +363,7 @@ def main():
         os.makedirs(args.log_dir, exist_ok=True)
         writer = SummaryWriter(log_dir=args.log_dir)
 
-    global_step = 0
-    for epoch in range(args.epochs):
+    for epoch in range(start_epoch, args.epochs):
         running_loss = 0.0
         running_reward = 0.0
         start = time.time()
@@ -374,6 +405,13 @@ def main():
         duration = time.time() - start
         print(f"Epoch {epoch+1} done in {duration:.1f}s | avg loss {running_loss/args.steps_per_epoch:.4f} | avg reward {running_reward/args.steps_per_epoch:.3f}")
 
+        # end-of-epoch eval on subset
+        min_pixels = args.min_visual_tokens * 28 * 28
+        max_pixels = args.max_visual_tokens * 28 * 28
+        sr = evaluate_screenspot_subset(processor, model, args.dataset_dir, args.eval_subset_limit, min_pixels, max_pixels, device)
+        if writer:
+            writer.add_scalar("eval/screenspot_subset_success_epoch", sr, epoch)
+
         # periodic save
         if ((epoch + 1) % args.save_every_epochs == 0):
             save_dir = os.path.join(os.getcwd(), f"rl_ckpt_epoch{epoch+1}")
@@ -385,6 +423,14 @@ def main():
             except Exception as e:
                 print(f"Fallback save failed: {e}")
             processor.save_pretrained(save_dir)
+            # Save optimizer and training state
+            if args.save_optimizer:
+                try:
+                    torch.save(optimizer.state_dict(), os.path.join(save_dir, "optimizer.pt"))
+                    with open(os.path.join(save_dir, "training_state.json"), "w") as f:
+                        json.dump({"epoch": epoch + 1, "global_step": global_step}, f)
+                except Exception as e:
+                    print(f"Saving optimizer failed: {e}")
             print(f"Saved RL checkpoint to {save_dir}")
 
     # No distributed cleanup needed
