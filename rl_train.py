@@ -58,6 +58,29 @@ def set_seed(seed: int) -> None:
 # Single-GPU only; no distributed initialization
 
 
+def find_latest_epoch_checkpoint(base_dir: str) -> tuple:
+    """Scan base_dir for rl_ckpt_epoch{N} directories and return (path, N) of the latest.
+    Returns (None, -1) if none found."""
+    if not os.path.isdir(base_dir):
+        return None, -1
+    latest_n = -1
+    latest_path = None
+    try:
+        for name in os.listdir(base_dir):
+            if not name.startswith("rl_ckpt_epoch"):
+                continue
+            try:
+                n = int(name.replace("rl_ckpt_epoch", ""))
+            except Exception:
+                continue
+            if n > latest_n:
+                latest_n = n
+                latest_path = os.path.join(base_dir, name)
+    except Exception:
+        pass
+    return latest_path, latest_n
+
+
 def load_split_items(dataset_dir: str, dataset: str, split: str) -> Tuple[str, List[dict]]:
     base_image_dir = os.path.join(dataset_dir, dataset_mapping[dataset])
     meta_dir = os.path.join(base_image_dir, "metadata")
@@ -331,26 +354,43 @@ def main():
 
     optimizer = AdamW(model.parameters(), lr=args.lr)
 
-    # Resume support
+    # Resume support (by directory naming or explicit path)
     start_epoch = 0
     global_step = 0
+    resume_dir = None
     if args.resume_from:
+        # If resume_from points to a base dir with epoch subdirs, pick latest
+        if os.path.isdir(args.resume_from) and not os.path.exists(os.path.join(args.resume_from, "pytorch_model.bin")):
+            cand_path, cand_epoch = find_latest_epoch_checkpoint(args.resume_from)
+            if cand_epoch >= 0:
+                resume_dir = cand_path
+                start_epoch = cand_epoch
+        else:
+            resume_dir = args.resume_from
+    else:
+        # Auto-resume from CWD if any epoch checkpoints exist
+        cand_path, cand_epoch = find_latest_epoch_checkpoint(os.getcwd())
+        if cand_epoch >= 0:
+            resume_dir = cand_path
+            start_epoch = cand_epoch
+
+    if resume_dir:
         try:
-            state_path = os.path.join(args.resume_from, "optimizer.pt")
-            meta_path = os.path.join(args.resume_from, "training_state.json")
+            # Load model weights
+            if os.path.exists(os.path.join(resume_dir, "pytorch_model.bin")):
+                sd = torch.load(os.path.join(resume_dir, "pytorch_model.bin"), map_location="cpu")
+                model.load_state_dict(sd, strict=False)
+            # Load optimizer and training meta if present
+            state_path = os.path.join(resume_dir, "optimizer.pt")
+            meta_path = os.path.join(resume_dir, "training_state.json")
             if os.path.exists(state_path):
                 optimizer.load_state_dict(torch.load(state_path, map_location="cpu"))
             if os.path.exists(meta_path):
                 with open(meta_path) as f:
                     meta = json.load(f)
-                start_epoch = int(meta.get("epoch", 0))
+                start_epoch = int(meta.get("epoch", start_epoch))
                 global_step = int(meta.get("global_step", 0))
-            # Load model weights
-            model_to_load = model
-            if os.path.exists(os.path.join(args.resume_from, "pytorch_model.bin")):
-                sd = torch.load(os.path.join(args.resume_from, "pytorch_model.bin"), map_location="cpu")
-                model_to_load.load_state_dict(sd, strict=False)
-            print(f"Resumed from {args.resume_from} at epoch {start_epoch}, step {global_step}")
+            print(f"Resumed from {resume_dir} (epoch {start_epoch})")
         except Exception as e:
             print(f"Resume failed: {e}")
 
@@ -411,6 +451,7 @@ def main():
         sr = evaluate_screenspot_subset(processor, model, args.dataset_dir, args.eval_subset_limit, min_pixels, max_pixels, device)
         if writer:
             writer.add_scalar("eval/screenspot_subset_success_epoch", sr, epoch)
+        print(f"Epoch {epoch+1} eval subset success: {sr:.4f}")
 
         # periodic save
         if ((epoch + 1) % args.save_every_epochs == 0):
