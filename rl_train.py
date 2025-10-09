@@ -262,6 +262,10 @@ def main():
     parser.add_argument("--max_visual_tokens", type=int, default=896)
     parser.add_argument("--gradient_checkpointing", action="store_true")
     parser.add_argument("--load_in_8bit", action="store_true", help="Load model in 8-bit (requires bitsandbytes)")
+    parser.add_argument("--log_dir", type=str, default="./runs/rl")
+    parser.add_argument("--eval_subset_limit", type=int, default=200)
+    parser.add_argument("--eval_every_steps", type=int, default=200)
+    parser.add_argument("--save_every_epochs", type=int, default=1)
     args_ns = parser.parse_args()
 
     args = RLArgs(
@@ -281,6 +285,10 @@ def main():
         max_visual_tokens=args_ns.max_visual_tokens,
         gradient_checkpointing=args_ns.gradient_checkpointing,
         load_in_8bit=args_ns.load_in_8bit,
+        log_dir=args_ns.log_dir,
+        eval_subset_limit=args_ns.eval_subset_limit,
+        eval_every_steps=args_ns.eval_every_steps,
+        save_every_epochs=args_ns.save_every_epochs,
     )
 
     set_seed(args.seed)
@@ -300,7 +308,7 @@ def main():
         model = Qwen2VLForConditionalGeneration.from_pretrained(
             args.model_id,
             quantization_config=quantization_config,
-            device_map={"": local_rank} if torch.cuda.is_available() else "auto",
+            device_map="auto",
         )
     else:
         model = Qwen2VLForConditionalGeneration.from_pretrained(args.model_id, torch_dtype=torch_dtype)
