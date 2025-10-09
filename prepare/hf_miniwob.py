@@ -9,7 +9,7 @@ import random
 import argparse
 from IPython.display import display
 
-prefix = "/home/qinghong/data/GUI_database"
+prefix = "~/showui_data"
 miniwob_url = f"{prefix}/MiniWob/metadata/miniwob_data_train.json"
 imgs_dir =  f"{prefix}/MiniWob/images"
 meta_dir = f"{prefix}/MiniWob/metadata/"

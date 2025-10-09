@@ -10,8 +10,8 @@ import argparse
 # imgs_dir =  "./datasets/GUI_database/Mind2Web/images"
 # anno_dir = "./datasets/GUI_database/Mind2Web/metadata"
 
-imgs_dir =  "/blob/v-lqinghong/data/GUI_database/Mind2Web/images"
-anno_dir = "/blob/v-lqinghong/data/GUI_database/Mind2Web/metadata"
+imgs_dir =  "~/showui_data/Mind2Web/images"
+anno_dir = "~/showui_data/Mind2Web/metadata"
 
 def data_transform(version='train', mini=False):
     mind2web_train = json.load(open(f"{anno_dir}/mind2web_data_{version}.json", 'r'))

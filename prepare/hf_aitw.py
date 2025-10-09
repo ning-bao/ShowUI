@@ -13,7 +13,7 @@ from PIL import Image, ImageDraw
 from data_utils import is_english_simple, bbox_2_point
 
 
-parent_dir = "/home/nao/showui_data/GUI_database"
+parent_dir = "~/showui_data"
 imgs_dir =  f"{parent_dir}/AITW/images"
 anno_dir = f"{parent_dir}/AITW/metadata"
 
