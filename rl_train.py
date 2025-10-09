@@ -126,8 +126,11 @@ def reinforce_step(model, processor, device, batch, args: RLArgs, optimizer):
     for k in list(processor_inputs.keys()):
         processor_inputs[k] = torch.cat(processor_inputs[k], dim=0).to(device)
 
+    # Unwrap DDP for generation if wrapped
+    model_unwrapped = model.module if hasattr(model, "module") else model
+
     with torch.no_grad():
-        generated = model.generate(
+        generated = model_unwrapped.generate(
             **processor_inputs,
             max_new_tokens=args.max_new_tokens,
             do_sample=True,
