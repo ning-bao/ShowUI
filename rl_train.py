@@ -14,7 +14,7 @@ from torch.optim import AdamW
 from PIL import Image
 from tqdm import tqdm
 
-from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
+from transformers import AutoProcessor, Qwen2VLForConditionalGeneration, BitsAndBytesConfig
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from data.dset_shared_grounding import dataset_mapping
@@ -40,6 +40,7 @@ class RLArgs:
     temperature: float = 0.7
     seed: int = 42
     gradient_checkpointing: bool = False
+    load_in_8bit: bool = False
 
 
 def set_seed(seed: int) -> None:
@@ -209,6 +210,7 @@ def main():
     parser.add_argument("--min_visual_tokens", type=int, default=256)
     parser.add_argument("--max_visual_tokens", type=int, default=896)
     parser.add_argument("--gradient_checkpointing", action="store_true")
+    parser.add_argument("--load_in_8bit", action="store_true", help="Load model in 8-bit (requires bitsandbytes)")
     args_ns = parser.parse_args()
 
     args = RLArgs(
@@ -227,6 +229,7 @@ def main():
         min_visual_tokens=args_ns.min_visual_tokens,
         max_visual_tokens=args_ns.max_visual_tokens,
         gradient_checkpointing=args_ns.gradient_checkpointing,
+        load_in_8bit=args_ns.load_in_8bit,
     )
 
     set_seed(args.seed)
@@ -241,8 +244,16 @@ def main():
 
     processor = AutoProcessor.from_pretrained(args.model_id, min_pixels=min_pixels, max_pixels=max_pixels)
     # Load model on this rank's device (avoid auto-sharding when using DDP)
-    model = Qwen2VLForConditionalGeneration.from_pretrained(args.model_id, torch_dtype=torch_dtype)
-    model.to(device)
+    if args.load_in_8bit:
+        quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+        model = Qwen2VLForConditionalGeneration.from_pretrained(
+            args.model_id,
+            quantization_config=quantization_config,
+            device_map={"": local_rank} if torch.cuda.is_available() else "auto",
+        )
+    else:
+        model = Qwen2VLForConditionalGeneration.from_pretrained(args.model_id, torch_dtype=torch_dtype)
+        model.to(device)
     if args.gradient_checkpointing:
         try:
             model.gradient_checkpointing_enable()
