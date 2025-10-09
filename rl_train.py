@@ -16,6 +16,7 @@ from tqdm import tqdm
 
 from transformers import AutoProcessor, Qwen2VLForConditionalGeneration, BitsAndBytesConfig
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.tensorboard import SummaryWriter
 
 from data.dset_shared_grounding import dataset_mapping
 from data.template.shared_grounding import grounding_to_qwen
@@ -41,6 +42,10 @@ class RLArgs:
     seed: int = 42
     gradient_checkpointing: bool = False
     load_in_8bit: bool = False
+    log_dir: str = "./runs/rl"
+    eval_subset_limit: int = 200
+    eval_every_steps: int = 200
+    save_every_epochs: int = 1
 
 
 def set_seed(seed: int) -> None:
@@ -106,6 +111,67 @@ def compute_reward(pred_xy: Tuple[float, float], tgt_xy: Tuple[float, float], ta
     d = l2_distance(pred_xy, tgt_xy)
     r = (1.0 if d < tau else 0.0) - alpha * min(d, 0.5)
     return max(-1.0, min(1.0, r))
+
+
+@torch.no_grad()
+def evaluate_screenspot_subset(processor, model, dataset_dir: str, limit: int, min_pixels: int, max_pixels: int, device: str) -> float:
+    """Lightweight subset eval on ScreenSpot. Returns success rate in [0,1]."""
+    meta_path = os.path.join(dataset_dir, "ScreenSpot", "metadata", "hf_test_full.json")
+    if not os.path.exists(meta_path):
+        return 0.0
+    try:
+        with open(meta_path) as f:
+            items = json.load(f)
+    except Exception:
+        return 0.0
+
+    N = min(limit, len(items)) if limit and limit > 0 else len(items)
+    if N == 0:
+        return 0.0
+
+    ok = 0
+    model_unwrapped = model.module if hasattr(model, "module") else model
+    model_unwrapped.eval()
+
+    for i in range(N):
+        item = items[i]
+        img_path = os.path.join(dataset_dir, "ScreenSpot", "images", item["img_url"]) 
+        if not os.path.exists(img_path):
+            continue
+        img = Image.open(img_path).convert("RGB")
+        img_w, img_h = (item["img_size"][0], item["img_size"][1]) if "img_size" in item else img.size
+
+        messages = [
+            {"role":"user","content":[
+                {"type":"text","text":"Based on the screenshot of the page, I give a text description and you give its corresponding location. The coordinate represents a clickable location [x, y] for an element, which is a relative coordinate on the screenshot, scaled from 0 to 1."},
+                {"type":"image","image":img,"min_pixels":min_pixels,"max_pixels":max_pixels},
+                {"type":"text","text":item["task"]},
+            ]}
+        ]
+        text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        inputs = processor(text=[text], images=[img], padding=True, return_tensors="pt")
+        inputs = inputs.to(device)
+
+        try:
+            out = model_unwrapped.generate(
+                **inputs,
+                max_new_tokens=64,
+                do_sample=False,
+                num_beams=1,
+                eos_token_id=processor.tokenizer.eos_token_id,
+                use_cache=False,
+            )
+            gen = out[:, inputs.input_ids.shape[1]:]
+            pred_str = processor.batch_decode(gen, skip_special_tokens=True, clean_up_tokenization_spaces=True)[0]
+            pred = parse_coord(pred_str)
+            x, y, w, h = item["bbox"]
+            gt = [x / img_w, y / img_h, (x + w) / img_w, (y + h) / img_h]
+            ok += 1 if (not any(math.isnan(v) for v in pred)) and (gt[0] <= pred[0] <= gt[2]) and (gt[1] <= pred[1] <= gt[3]) else 0
+        except Exception:
+            continue
+
+    model_unwrapped.train()
+    return ok / N
 
 
 def reinforce_step(model, processor, device, batch, args: RLArgs, optimizer):
@@ -268,6 +334,12 @@ def main():
     if global_rank == 0:
         print(f"Loaded {len(samples)} samples from {args.train_dataset}/{args.train_json}")
 
+    writer = None
+    if (not is_distributed) or (global_rank == 0):
+        os.makedirs(args.log_dir, exist_ok=True)
+        writer = SummaryWriter(log_dir=args.log_dir)
+
+    global_step = 0
     for epoch in range(args.epochs):
         running_loss = 0.0
         running_reward = 0.0
@@ -294,24 +366,36 @@ def main():
             running_reward += reward
             if global_rank == 0:
                 pbar.set_postfix({"loss": f"{loss:.4f}", "reward": f"{reward:.3f}"})
+                if writer:
+                    writer.add_scalar("train/loss", loss, global_step)
+                    writer.add_scalar("train/reward", reward, global_step)
+
+            # periodic subset eval
+            if ((global_step + 1) % args.eval_every_steps == 0) and global_rank == 0:
+                min_pixels = args.min_visual_tokens * 28 * 28
+                max_pixels = args.max_visual_tokens * 28 * 28
+                sr = evaluate_screenspot_subset(processor, model, args.dataset_dir, args.eval_subset_limit, min_pixels, max_pixels, device)
+                if writer:
+                    writer.add_scalar("eval/screenspot_subset_success", sr, global_step)
+
+            global_step += 1
 
         duration = time.time() - start
         if global_rank == 0:
             print(f"Epoch {epoch+1} done in {duration:.1f}s | avg loss {running_loss/args.steps_per_epoch:.4f} | avg reward {running_reward/args.steps_per_epoch:.3f}")
 
-    # save (rank 0 only) – avoid DeepSpeed unwrap issues
-    if (not is_distributed) or (global_rank == 0):
-        save_dir = os.path.join(os.getcwd(), "rl_ckpt")
-        os.makedirs(save_dir, exist_ok=True)
-        model_to_save = model.module if hasattr(model, "module") else model
-        try:
-            # Prefer state_dict to avoid any unwrap imports
-            torch.save(model_to_save.state_dict(), os.path.join(save_dir, "pytorch_model.bin"))
-            model_to_save.config.to_json_file(os.path.join(save_dir, "config.json"))
-        except Exception as e:
-            print(f"Fallback save failed: {e}")
-        processor.save_pretrained(save_dir)
-        print(f"Saved RL checkpoint to {save_dir}")
+        # periodic save
+        if ((epoch + 1) % args.save_every_epochs == 0) and ((not is_distributed) or (global_rank == 0)):
+            save_dir = os.path.join(os.getcwd(), f"rl_ckpt_epoch{epoch+1}")
+            os.makedirs(save_dir, exist_ok=True)
+            model_to_save = model.module if hasattr(model, "module") else model
+            try:
+                torch.save(model_to_save.state_dict(), os.path.join(save_dir, "pytorch_model.bin"))
+                model_to_save.config.to_json_file(os.path.join(save_dir, "config.json"))
+            except Exception as e:
+                print(f"Fallback save failed: {e}")
+            processor.save_pretrained(save_dir)
+            print(f"Saved RL checkpoint to {save_dir}")
 
     # cleanup
     if is_distributed and dist.is_initialized():
