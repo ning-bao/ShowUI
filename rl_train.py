@@ -4,6 +4,8 @@ import math
 import time
 import json
 import random
+import re
+import numpy as np
 from dataclasses import dataclass
 from typing import List, Tuple
 
@@ -34,9 +36,21 @@ class RLArgs:
     steps_per_epoch: int = 200
     epochs: int = 1
     tau_success: float = 0.06
+    tau_success_end: float = 0.06
     alpha_dist: float = 1.0
     max_new_tokens: int = 64
     temperature: float = 0.7
+    temperature_end: float = 0.7
+    top_p: float = 0.0
+    top_k: int = 0
+    do_sample: bool = True
+    num_beams: int = 1
+    grad_accum_steps: int = 1
+    entropy_coef_start: float = 0.01
+    entropy_coef_end: float = 0.0
+    kl_coef: float = 0.0
+    ref_model_id: str = ""
+    ref_model_8bit: bool = True
     seed: int = 42
     gradient_checkpointing: bool = False
     load_in_8bit: bool = False
@@ -47,6 +61,9 @@ class RLArgs:
     resume_from: str = ""
     save_optimizer: bool = True
     eval_split: str = "hf_test_full"
+    log_samples_every: int = 100
+    log_hist_every: int = 100
+    save_best: bool = True
 
 
 def set_seed(seed: int) -> None:
@@ -104,7 +121,17 @@ def parse_coord(output_text: str) -> Tuple[float, float]:
         xy = ast.literal_eval(output_text)
         if isinstance(xy, (list, tuple)) and len(xy) == 2:
             x, y = float(xy[0]), float(xy[1])
-            return x, y
+            if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0:
+                return x, y
+    except Exception:
+        pass
+    # regex fallback: extract first pair of floats
+    try:
+        m = re.search(r"\[?\s*([0-9]*\.?[0-9]+)\s*,\s*([0-9]*\.?[0-9]+)\s*\]?", output_text)
+        if m:
+            x, y = float(m.group(1)), float(m.group(2))
+            if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0:
+                return x, y
     except Exception:
         pass
     return float("nan"), float("nan")
@@ -185,7 +212,7 @@ def evaluate_screenspot_subset(processor, model, dataset_dir: str, limit: int, m
     return ok / N
 
 
-def reinforce_step(model, processor, device, batch, args: RLArgs, optimizer):
+def reinforce_step(model, processor, device, batch, args: RLArgs):
     model.train()
 
     texts: List[str] = []
@@ -208,12 +235,21 @@ def reinforce_step(model, processor, device, batch, args: RLArgs, optimizer):
     model_unwrapped = model.module if hasattr(model, "module") else model
 
     with torch.no_grad():
+        gen_kwargs = {
+            "max_new_tokens": args.max_new_tokens,
+            "do_sample": args.do_sample,
+            "temperature": args.temperature,
+            "num_beams": args.num_beams,
+            "eos_token_id": processor.tokenizer.eos_token_id,
+            "use_cache": True,
+        }
+        if args.top_p and args.top_p > 0.0:
+            gen_kwargs["top_p"] = args.top_p
+        if args.top_k and args.top_k > 0:
+            gen_kwargs["top_k"] = args.top_k
         generated = model_unwrapped.generate(
             **processor_inputs,
-            max_new_tokens=args.max_new_tokens,
-            do_sample=True,
-            temperature=args.temperature,
-            use_cache=False,
+            **gen_kwargs,
         )
 
     # trim prompt tokens
@@ -257,15 +293,48 @@ def reinforce_step(model, processor, device, batch, args: RLArgs, optimizer):
     token_mask = (target != processor.tokenizer.pad_token_id).float()
     seq_nll = (nll * token_mask).sum(dim=1) / (token_mask.sum(dim=1) + 1e-6)
 
-    # REINFORCE objective: minimize (-reward * logprob) = reward * nll
-    loss = (rewards_tensor * seq_nll).mean()
+    # Advantage normalization
+    adv = rewards_tensor - rewards_tensor.mean()
+    adv = adv / (rewards_tensor.std() + 1e-6)
 
-    optimizer.zero_grad(set_to_none=True)
-    loss.backward()
-    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-    optimizer.step()
+    # Entropy bonus on generated tokens
+    log_probs = F.log_softmax(logits, dim=-1)
+    probs = log_probs.exp()
+    token_entropy = -(probs * log_probs).sum(dim=-1)  # [B, T]
+    entropy_per_seq = (token_entropy * token_mask).sum(dim=1) / (token_mask.sum(dim=1) + 1e-6)
+    entropy_mean = entropy_per_seq.mean()
 
-    return float(loss.item()), float(rewards_tensor.mean().item())
+    # Optional KL to reference policy (PPO-style safety)
+    kl_loss = torch.tensor(0.0, device=device)
+    if getattr(args, "_ref_logits_fn", None) is not None and args.kl_coef > 0.0:
+        with torch.no_grad():
+            ref_logits = args._ref_logits_fn(
+                input_ids=input_ids_full.to(device),
+                attention_mask=attention_mask_full.to(device),
+                pixel_values=processor_inputs.get("pixel_values"),
+                image_grid_thw=processor_inputs.get("image_grid_thw"),
+            )
+        ref_logits = ref_logits[:, prompt_len - 1 : -1, :].contiguous()
+        ref_log_probs = F.log_softmax(ref_logits, dim=-1)
+        # KL(policy || ref) per token
+        kl_token = (probs * (log_probs - ref_log_probs)).sum(dim=-1)
+        kl_per_seq = (kl_token * token_mask).sum(dim=1) / (token_mask.sum(dim=1) + 1e-6)
+        kl_loss = kl_per_seq.mean()
+
+    # REINFORCE objective with entropy and KL
+    policy_loss = (adv * seq_nll).mean()
+    loss = policy_loss - args.entropy_coef_start * entropy_mean + args.kl_coef * kl_loss
+
+    # Prepare sample texts for optional logging
+    sample_pairs = []
+    try:
+        for i, out_text in enumerate(decoded[: min(2, len(decoded))]):
+            elem_name = batch[i][0] if i < len(batch) else ""
+            sample_pairs.append((elem_name, out_text))
+    except Exception:
+        pass
+
+    return loss, float(rewards_tensor.mean().item()), float(entropy_mean.item()), float(kl_loss.item()), sample_pairs
 
 
 def main():
@@ -280,9 +349,21 @@ def main():
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--lr", type=float, default=5e-6)
     parser.add_argument("--tau_success", type=float, default=0.06)
+    parser.add_argument("--tau_success_end", type=float, default=0.06)
     parser.add_argument("--alpha_dist", type=float, default=1.0)
     parser.add_argument("--max_new_tokens", type=int, default=64)
     parser.add_argument("--temperature", type=float, default=0.7)
+    parser.add_argument("--temperature_end", type=float, default=0.7)
+    parser.add_argument("--top_p", type=float, default=0.0)
+    parser.add_argument("--top_k", type=int, default=0)
+    parser.add_argument("--do_sample", action="store_true")
+    parser.add_argument("--num_beams", type=int, default=1)
+    parser.add_argument("--grad_accum_steps", type=int, default=1)
+    parser.add_argument("--entropy_coef_start", type=float, default=0.01)
+    parser.add_argument("--entropy_coef_end", type=float, default=0.0)
+    parser.add_argument("--kl_coef", type=float, default=0.0)
+    parser.add_argument("--ref_model_id", type=str, default="")
+    parser.add_argument("--ref_model_8bit", action="store_true")
     parser.add_argument("--model_id", type=str, default="showlab/ShowUI-2B")
     parser.add_argument("--min_visual_tokens", type=int, default=256)
     parser.add_argument("--max_visual_tokens", type=int, default=896)
@@ -295,6 +376,9 @@ def main():
     parser.add_argument("--resume_from", type=str, default="", help="Resume from checkpoint directory")
     parser.add_argument("--save_optimizer", action="store_true")
     parser.add_argument("--eval_split", type=str, default="hf_test_full")
+    parser.add_argument("--log_samples_every", type=int, default=100)
+    parser.add_argument("--log_hist_every", type=int, default=100)
+    parser.add_argument("--save_best", action="store_true")
     args_ns = parser.parse_args()
 
     args = RLArgs(
@@ -306,9 +390,21 @@ def main():
         batch_size=args_ns.batch_size,
         lr=args_ns.lr,
         tau_success=args_ns.tau_success,
+        tau_success_end=args_ns.tau_success_end,
         alpha_dist=args_ns.alpha_dist,
         max_new_tokens=args_ns.max_new_tokens,
         temperature=args_ns.temperature,
+        temperature_end=args_ns.temperature_end,
+        top_p=args_ns.top_p,
+        top_k=args_ns.top_k,
+        do_sample=args_ns.do_sample,
+        num_beams=args_ns.num_beams,
+        grad_accum_steps=args_ns.grad_accum_steps,
+        entropy_coef_start=args_ns.entropy_coef_start,
+        entropy_coef_end=args_ns.entropy_coef_end,
+        kl_coef=args_ns.kl_coef,
+        ref_model_id=args_ns.ref_model_id,
+        ref_model_8bit=args_ns.ref_model_8bit,
         model_id=args_ns.model_id,
         min_visual_tokens=args_ns.min_visual_tokens,
         max_visual_tokens=args_ns.max_visual_tokens,
@@ -321,6 +417,9 @@ def main():
         resume_from=args_ns.resume_from,
         save_optimizer=args_ns.save_optimizer,
         eval_split=args_ns.eval_split,
+        log_samples_every=args_ns.log_samples_every,
+        log_hist_every=args_ns.log_hist_every,
+        save_best=args_ns.save_best,
     )
 
     set_seed(args.seed)
@@ -353,6 +452,40 @@ def main():
     # No DDP wrapping
 
     optimizer = AdamW(model.parameters(), lr=args.lr)
+
+    # Optional reference model for KL regularization
+    ref_model = None
+    if args.kl_coef > 0.0:
+        try:
+            ref_id = args.ref_model_id if args.ref_model_id else args.model_id
+            if args.ref_model_8bit:
+                ref_qconf = BitsAndBytesConfig(load_in_8bit=True)
+                ref_model = Qwen2VLForConditionalGeneration.from_pretrained(
+                    ref_id,
+                    quantization_config=ref_qconf,
+                    device_map="auto",
+                )
+            else:
+                ref_model = Qwen2VLForConditionalGeneration.from_pretrained(ref_id, torch_dtype=torch_dtype)
+                ref_model.to(device)
+            ref_model.eval()
+            for p in ref_model.parameters():
+                p.requires_grad_(False)
+
+            def _ref_logits_fn(input_ids, attention_mask, pixel_values=None, image_grid_thw=None):
+                out = ref_model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    pixel_values=pixel_values,
+                    image_grid_thw=image_grid_thw,
+                    labels=None,
+                )
+                return out.logits
+
+            args._ref_logits_fn = _ref_logits_fn
+        except Exception as e:
+            print(f"Reference model load failed, disabling KL: {e}")
+            args.kl_coef = 0.0
 
     # Resume support (by directory naming or explicit path)
     start_epoch = 0
@@ -403,34 +536,102 @@ def main():
         os.makedirs(args.log_dir, exist_ok=True)
         writer = SummaryWriter(log_dir=args.log_dir)
 
+    # Utility: epoch-wise shuffled iterator over samples
+    def sample_epoch_iterator(all_samples):
+        idxs = list(range(len(all_samples)))
+        random.shuffle(idxs)
+        for i in idxs:
+            yield all_samples[i]
+
+    total_optim_steps = args.epochs * args.steps_per_epoch
+    best_sr = -1.0
+
+    # Initialize schedules from fixed starting points
+    if not hasattr(args, "_sched_init"):
+        object.__setattr__(args, "_temp_start", float(args.temperature))
+        object.__setattr__(args, "_tau_start", float(args.tau_success))
+        object.__setattr__(args, "_entropy_start", float(args.entropy_coef_start))
+        object.__setattr__(args, "_sched_init", True)
+
     for epoch in range(start_epoch, args.epochs):
         running_loss = 0.0
         running_reward = 0.0
+        running_entropy = 0.0
+        running_kl = 0.0
         start = time.time()
 
         pbar = tqdm(range(args.steps_per_epoch), desc=f"Epoch {epoch+1}/{args.epochs}")
         for _ in pbar:
-            batch_items = []
-            for _ in range(args.batch_size):
-                item = random.choice(samples)
-                image_path = os.path.join(img_dir, item["img_url"]) if "img_url" in item else ""
-                element = random.choice(item["element"]) if item.get("element") else None
-                if element is None:
+            # schedules
+            progress = (global_step + 1) / max(1, total_optim_steps)
+            # temperature schedule
+            temperature_now = float(args._temp_start + (args.temperature_end - args._temp_start) * progress)
+            object.__setattr__(args, "temperature", temperature_now)
+            # entropy schedule
+            entropy_now = float(args._entropy_start + (args.entropy_coef_end - args._entropy_start) * progress)
+            object.__setattr__(args, "entropy_coef_start", entropy_now)
+            # tau schedule
+            tau_now = float(args._tau_start + (args.tau_success_end - args._tau_start) * progress)
+            object.__setattr__(args, "tau_success", tau_now)
+
+            accum_loss = 0.0
+            accum_reward = 0.0
+            accum_entropy = 0.0
+            accum_kl = 0.0
+
+            optimizer.zero_grad(set_to_none=True)
+            for micro in range(max(1, args.grad_accum_steps)):
+                batch_items = []
+                # shuffled iterator per epoch
+                for _ in range(args.batch_size):
+                    # try to draw a valid sample with at least one element
+                    # fall back to random choice if needed
+                    item = None
+                    for cand in sample_epoch_iterator(samples):
+                        if cand.get("element"):
+                            item = cand
+                            break
+                    if item is None:
+                        item = random.choice(samples)
+                        if not item.get("element"):
+                            continue
+                    image_path = os.path.join(img_dir, item["img_url"]) if "img_url" in item else ""
+                    element = random.choice(item["element"]) if item.get("element") else None
+                    if element is None:
+                        continue
+                    element_name = element["instruction"]
+                    tgt_xy = (float(element["point"][0]), float(element["point"][1]))
+                    batch_items.append((element_name, image_path, tgt_xy))
+
+                if not batch_items:
                     continue
-                element_name = element["instruction"]
-                tgt_xy = (float(element["point"][0]), float(element["point"][1]))
-                batch_items.append((element_name, image_path, tgt_xy))
 
-            if not batch_items:
-                continue
+                loss_tensor, reward, ent, kl, sample_pairs = reinforce_step(model, processor, device, batch_items, args)
+                (loss_tensor / max(1, args.grad_accum_steps)).backward()
+                accum_loss += float(loss_tensor.item())
+                accum_reward += reward
+                accum_entropy += ent
+                accum_kl += kl
 
-            loss, reward = reinforce_step(model, processor, device, batch_items, args, optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+
+            loss = accum_loss / max(1, args.grad_accum_steps)
+            reward = accum_reward / max(1, args.grad_accum_steps)
+            ent = accum_entropy / max(1, args.grad_accum_steps)
+            kl = accum_kl / max(1, args.grad_accum_steps)
+
             running_loss += loss
             running_reward += reward
-            pbar.set_postfix({"loss": f"{loss:.4f}", "reward": f"{reward:.3f}"})
+            running_entropy += ent
+            running_kl += kl
+            pbar.set_postfix({"loss": f"{loss:.4f}", "reward": f"{reward:.3f}", "H": f"{ent:.3f}", "KL": f"{kl:.3f}"})
             if writer:
                 writer.add_scalar("train/loss", loss, global_step)
                 writer.add_scalar("train/reward", reward, global_step)
+                writer.add_scalar("train/entropy", ent, global_step)
+                if args.kl_coef > 0.0:
+                    writer.add_scalar("train/kl", kl, global_step)
 
             # periodic subset eval
             if ((global_step + 1) % args.eval_every_steps == 0):
@@ -439,6 +640,28 @@ def main():
                 sr = evaluate_screenspot_subset(processor, model, args.dataset_dir, args.eval_subset_limit, min_pixels, max_pixels, device)
                 if writer:
                     writer.add_scalar("eval/screenspot_subset_success", sr, global_step)
+                if args.save_best and sr > best_sr:
+                    best_sr = sr
+                    save_dir = os.path.join(os.getcwd(), f"rl_ckpt_best")
+                    os.makedirs(save_dir, exist_ok=True)
+                    model_to_save = model.module if hasattr(model, "module") else model
+                    try:
+                        torch.save(model_to_save.state_dict(), os.path.join(save_dir, "pytorch_model.bin"))
+                        model_to_save.config.to_json_file(os.path.join(save_dir, "config.json"))
+                    except Exception as e:
+                        print(f"Best save failed: {e}")
+                    processor.save_pretrained(save_dir)
+
+            # optional histograms and text samples logging cadence
+            if writer and args.log_hist_every > 0 and ((global_step + 1) % args.log_hist_every == 0):
+                # Note: with current API we only have mean reward here; histogram will be sparse
+                writer.add_histogram("train/reward_hist_mean", np.array([reward], dtype=np.float32), global_step)
+            if writer and args.log_samples_every > 0 and ((global_step + 1) % args.log_samples_every == 0):
+                try:
+                    for i, (elem_name, out_text) in enumerate(sample_pairs):
+                        writer.add_text(f"train/sample_{i}", f"Instruction: {elem_name}\nOutput: {out_text}", global_step)
+                except Exception:
+                    pass
 
             global_step += 1
 
