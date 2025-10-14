@@ -233,24 +233,45 @@ def reinforce_step(model, processor, device, batch, args: RLArgs):
 
     # Unwrap DDP for generation if wrapped
     model_unwrapped = model.module if hasattr(model, "module") else model
+    # Ensure float inputs match model dtype
+    try:
+        param_dtype = next(model_unwrapped.parameters()).dtype
+    except StopIteration:
+        param_dtype = torch.float32
+
+    # Cast pixel values to model dtype to avoid dtype-induced NaNs
+    if "pixel_values" in processor_inputs and processor_inputs["pixel_values"] is not None:
+        processor_inputs["pixel_values"] = processor_inputs["pixel_values"].to(dtype=param_dtype)
 
     with torch.no_grad():
+        safe_temperature = float(max(args.temperature, 1e-4)) if args.do_sample else 1.0
         gen_kwargs = {
-            "max_new_tokens": args.max_new_tokens,
-            "do_sample": args.do_sample,
-            "temperature": args.temperature,
-            "num_beams": args.num_beams,
+            "max_new_tokens": int(max(1, args.max_new_tokens)),
+            "do_sample": bool(args.do_sample),
+            "temperature": safe_temperature,
+            "num_beams": int(max(1, args.num_beams)),
             "eos_token_id": processor.tokenizer.eos_token_id,
-            "use_cache": True,
+            "use_cache": False,
         }
         if args.top_p and args.top_p > 0.0:
-            gen_kwargs["top_p"] = args.top_p
+            gen_kwargs["top_p"] = float(min(1.0, max(1e-6, args.top_p)))
         if args.top_k and args.top_k > 0:
-            gen_kwargs["top_k"] = args.top_k
-        generated = model_unwrapped.generate(
-            **processor_inputs,
-            **gen_kwargs,
-        )
+            gen_kwargs["top_k"] = int(max(1, args.top_k))
+        try:
+            generated = model_unwrapped.generate(
+                **processor_inputs,
+                **gen_kwargs,
+            )
+        except Exception:
+            # Fallback to deterministic greedy decoding if sampler fails
+            generated = model_unwrapped.generate(
+                **processor_inputs,
+                max_new_tokens=int(max(1, args.max_new_tokens)),
+                do_sample=False,
+                num_beams=1,
+                eos_token_id=processor.tokenizer.eos_token_id,
+                use_cache=False,
+            )
 
     # trim prompt tokens
     gen_trimmed = []
@@ -286,6 +307,8 @@ def reinforce_step(model, processor, device, batch, args: RLArgs):
     # compute per-token NLL over generated tokens only
     vocab = outputs.logits.size(-1)
     logits = outputs.logits[:, prompt_len - 1 : -1, :].contiguous()
+    # sanitize logits to avoid NaNs/Infs
+    logits = torch.nan_to_num(logits, nan=0.0, posinf=1e4, neginf=-1e4)
     target = input_ids_full[:, prompt_len:].contiguous()
     nll = F.cross_entropy(logits.view(-1, vocab), target.view(-1), reduction="none")
     nll = nll.view(target.size(0), target.size(1))
@@ -295,11 +318,17 @@ def reinforce_step(model, processor, device, batch, args: RLArgs):
 
     # Advantage normalization
     adv = rewards_tensor - rewards_tensor.mean()
-    adv = adv / (rewards_tensor.std() + 1e-6)
+    std = rewards_tensor.std()
+    if float(std.item()) > 1e-6:
+        adv = adv / std
+    else:
+        adv = torch.zeros_like(adv)
 
     # Entropy bonus on generated tokens
     log_probs = F.log_softmax(logits, dim=-1)
     probs = log_probs.exp()
+    # sanitize probs
+    probs = torch.nan_to_num(probs, nan=0.0)
     token_entropy = -(probs * log_probs).sum(dim=-1)  # [B, T]
     entropy_per_seq = (token_entropy * token_mask).sum(dim=1) / (token_mask.sum(dim=1) + 1e-6)
     entropy_mean = entropy_per_seq.mean()
@@ -324,6 +353,9 @@ def reinforce_step(model, processor, device, batch, args: RLArgs):
     # REINFORCE objective with entropy and KL
     policy_loss = (adv * seq_nll).mean()
     loss = policy_loss - args.entropy_coef_start * entropy_mean + args.kl_coef * kl_loss
+    if not torch.isfinite(loss):
+        # fallback to finite surrogate
+        loss = torch.nan_to_num(policy_loss, nan=0.0, posinf=1e4, neginf=1e4)
 
     # Prepare sample texts for optional logging
     sample_pairs = []
