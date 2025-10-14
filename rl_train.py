@@ -64,6 +64,7 @@ class RLArgs:
     log_samples_every: int = 100
     log_hist_every: int = 100
     save_best: bool = True
+    warmup_steps: int = 200
 
 
 def set_seed(seed: int) -> None:
@@ -111,7 +112,13 @@ def build_prompt(processor, element_name: str, image_path: str, min_pixels: int,
     img = Image.open(image_path).convert("RGB")
     img_dict = {"type": "image", "min_pixels": min_pixels, "max_pixels": max_pixels}
     messages = grounding_to_qwen(element_name, img_dict, sample_io=0, user_prompt_random=False, xy_int=False, uniform_prompt=True)
-    text = processor.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    # Strong instruction to return only [x, y]
+    if isinstance(messages, list) and len(messages) > 0 and isinstance(messages[0], dict):
+        try:
+            messages[0]["content"].append({"type":"text","text":"Output only [x, y] where both are between 0 and 1."})
+        except Exception:
+            pass
+    text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     inputs = processor(text=[text], images=[img], padding=True, return_tensors="pt")
     return text, inputs
 
@@ -121,17 +128,19 @@ def parse_coord(output_text: str) -> Tuple[float, float]:
         xy = ast.literal_eval(output_text)
         if isinstance(xy, (list, tuple)) and len(xy) == 2:
             x, y = float(xy[0]), float(xy[1])
-            if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0:
-                return x, y
+            x = min(1.0, max(0.0, x))
+            y = min(1.0, max(0.0, y))
+            return x, y
     except Exception:
         pass
     # regex fallback: extract first pair of floats
     try:
-        m = re.search(r"\[?\s*([0-9]*\.?[0-9]+)\s*,\s*([0-9]*\.?[0-9]+)\s*\]?", output_text)
+        m = re.search(r"[\[\(]?\s*([-+]?[0-9]*\.?[0-9]+)\s*,\s*([-+]?[0-9]*\.?[0-9]+)\s*[\]\)]?", output_text)
         if m:
             x, y = float(m.group(1)), float(m.group(2))
-            if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0:
-                return x, y
+            x = min(1.0, max(0.0, x))
+            y = min(1.0, max(0.0, y))
+            return x, y
     except Exception:
         pass
     return float("nan"), float("nan")
@@ -258,10 +267,22 @@ def reinforce_step(model, processor, device, batch, args: RLArgs):
         if args.top_k and args.top_k > 0:
             gen_kwargs["top_k"] = int(max(1, args.top_k))
         try:
-            generated = model_unwrapped.generate(
-                **processor_inputs,
-                **gen_kwargs,
-            )
+            # Warmup: force greedy decoding for first N steps to reduce invalid parses
+            force_greedy = getattr(args, "_global_step", 0) < int(max(0, args.warmup_steps))
+            if force_greedy:
+                generated = model_unwrapped.generate(
+                    **processor_inputs,
+                    max_new_tokens=int(max(1, args.max_new_tokens)),
+                    do_sample=False,
+                    num_beams=1,
+                    eos_token_id=processor.tokenizer.eos_token_id,
+                    use_cache=True,
+                )
+            else:
+                generated = model_unwrapped.generate(
+                    **processor_inputs,
+                    **gen_kwargs,
+                )
         except Exception:
             # Fallback to deterministic greedy decoding if sampler fails
             generated = model_unwrapped.generate(
@@ -270,7 +291,7 @@ def reinforce_step(model, processor, device, batch, args: RLArgs):
                 do_sample=False,
                 num_beams=1,
                 eos_token_id=processor.tokenizer.eos_token_id,
-                use_cache=False,
+                use_cache=True,
             )
 
     # trim prompt tokens
@@ -411,6 +432,7 @@ def main():
     parser.add_argument("--log_samples_every", type=int, default=100)
     parser.add_argument("--log_hist_every", type=int, default=100)
     parser.add_argument("--save_best", action="store_true")
+    parser.add_argument("--warmup_steps", type=int, default=200)
     args_ns = parser.parse_args()
 
     args = RLArgs(
@@ -452,6 +474,7 @@ def main():
         log_samples_every=args_ns.log_samples_every,
         log_hist_every=args_ns.log_hist_every,
         save_best=args_ns.save_best,
+        warmup_steps=args_ns.warmup_steps,
     )
 
     set_seed(args.seed)
@@ -672,6 +695,12 @@ def main():
                 writer.add_scalar("train/entropy", ent, global_step)
                 if args.kl_coef > 0.0:
                     writer.add_scalar("train/kl", kl, global_step)
+                # invalid parse rate approximation: 1.0 if reward == -1 and seq_nll finite
+                try:
+                    invalid_rate = 1.0 if reward <= -0.999 else 0.0
+                    writer.add_scalar("train/invalid_parse_rate", invalid_rate, global_step)
+                except Exception:
+                    pass
 
             # periodic subset eval
             if ((global_step + 1) % args.eval_every_steps == 0):
@@ -704,6 +733,10 @@ def main():
                     pass
 
             global_step += 1
+            try:
+                object.__setattr__(args, "_global_step", int(global_step))
+            except Exception:
+                pass
 
         duration = time.time() - start
         print(f"Epoch {epoch+1} done in {duration:.1f}s | avg loss {running_loss/args.steps_per_epoch:.4f} | avg reward {running_reward/args.steps_per_epoch:.3f}")
