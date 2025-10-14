@@ -251,7 +251,7 @@ def reinforce_step(model, processor, device, batch, args: RLArgs):
             "temperature": safe_temperature,
             "num_beams": int(max(1, args.num_beams)),
             "eos_token_id": processor.tokenizer.eos_token_id,
-            "use_cache": False,
+            "use_cache": True,
         }
         if args.top_p and args.top_p > 0.0:
             gen_kwargs["top_p"] = float(min(1.0, max(1e-6, args.top_p)))
@@ -318,7 +318,7 @@ def reinforce_step(model, processor, device, batch, args: RLArgs):
 
     # Advantage normalization
     adv = rewards_tensor - rewards_tensor.mean()
-    std = rewards_tensor.std()
+    std = rewards_tensor.std(unbiased=False)
     if float(std.item()) > 1e-6:
         adv = adv / std
     else:
@@ -460,6 +460,14 @@ def main():
     global_rank = 0
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch_dtype = torch.bfloat16 if device.startswith("cuda") else torch.float32
+
+    # speed optimizations
+    try:
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+    except Exception:
+        pass
 
     min_pixels = args.min_visual_tokens * 28 * 28
     max_pixels = args.max_visual_tokens * 28 * 28
