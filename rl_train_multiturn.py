@@ -69,11 +69,11 @@ class MTRLArgs:
     load_in_8bit: bool = False
     # logging
     log_dir: str = "./runs/rl-mt"
-    eval_subset_limit: int = 100
+    eval_subset_limit: int = 1000
     eval_every_steps: int = 200
     log_samples_every: int = 100
     log_hist_every: int = 100
-    save_every_epochs: int = 1
+    save_every_epochs: int = 10
     save_best: bool = True
     # KL regularization
     kl_coef: float = 0.0
@@ -521,9 +521,9 @@ def main():
     parser.add_argument("--gradient_checkpointing", action="store_true")
     parser.add_argument("--load_in_8bit", action="store_true")
     parser.add_argument("--log_dir", type=str, default="./runs/rl-mt")
-    parser.add_argument("--eval_subset_limit", type=int, default=100)
+    parser.add_argument("--eval_subset_limit", type=int, default=1000)
     parser.add_argument("--eval_every_steps", type=int, default=200)
-    parser.add_argument("--save_every_epochs", type=int, default=1)
+    parser.add_argument("--save_every_epochs", type=int, default=10)
     parser.add_argument("--resume_from", type=str, default="")
     parser.add_argument("--save_optimizer", action="store_true")
     parser.add_argument("--eval_split", type=str, default="hf_test_full")
@@ -831,7 +831,7 @@ def main():
                 sr = evaluate_screenspot_subset_multiturn(processor, model, args.dataset_dir, args.eval_subset_limit, min_pixels, max_pixels, device, max(1, int(args.turns_per_traj)))
                 if writer:
                     writer.add_scalar("eval/screenspot_subset_success", sr, global_step)
-                if args.save_best and sr > best_sr:
+                if sr > best_sr:
                     best_sr = sr
                     save_dir = os.path.join(os.getcwd(), f"rl_ckpt_best")
                     os.makedirs(save_dir, exist_ok=True)
@@ -859,6 +859,19 @@ def main():
         if writer:
             writer.add_scalar("eval/screenspot_subset_success_epoch", sr, epoch)
         print(f"Epoch {epoch+1} eval subset success (multi-turn): {sr:.4f}")
+
+        # Always save best at end of epoch
+        if sr > best_sr:
+            best_sr = sr
+            save_dir = os.path.join(os.getcwd(), f"rl_ckpt_best")
+            os.makedirs(save_dir, exist_ok=True)
+            model_to_save = model.module if hasattr(model, "module") else model
+            try:
+                torch.save(model_to_save.state_dict(), os.path.join(save_dir, "pytorch_model.bin"))
+                model_to_save.config.to_json_file(os.path.join(save_dir, "config.json"))
+            except Exception as e:
+                print(f"Best save failed: {e}")
+            processor.save_pretrained(save_dir)
 
         if ((epoch + 1) % args.save_every_epochs == 0):
             save_dir = os.path.join(os.getcwd(), f"rl_ckpt_epoch{epoch+1}")
