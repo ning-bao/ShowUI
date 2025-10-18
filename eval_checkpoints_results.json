@@ -1,0 +1,93 @@
+{
+  "dataset_dir": "/home/nao/showui_data",
+  "split": "hf_test_full",
+  "min_visual_tokens": 256,
+  "max_visual_tokens": 1344,
+  "device": "cuda",
+  "checkpoints": {
+    "/mnt/f/USYD/Research/ShowUI/rl_ckpt_best": {
+      "checkpoint_dir": "/mnt/f/USYD/Research/ShowUI/rl_ckpt_best",
+      "split": "hf_test_full",
+      "metrics": {
+        "desktop": {
+          "icon": {
+            "success_rate": 0.5857142857142857,
+            "total": 140
+          },
+          "text": {
+            "success_rate": 0.7835051546391752,
+            "total": 194
+          }
+        },
+        "mobile": {
+          "icon": {
+            "success_rate": 0.7379912663755459,
+            "total": 229
+          },
+          "text": {
+            "success_rate": 0.9267399267399268,
+            "total": 273
+          }
+        },
+        "web": {
+          "text": {
+            "success_rate": 0.8260869565217391,
+            "total": 230
+          },
+          "icon": {
+            "success_rate": 0.616504854368932,
+            "total": 206
+          }
+        },
+        "overall": {
+          "success_rate": 0.764937106918239,
+          "total": 1272
+        }
+      }
+    },
+    "/mnt/f/USYD/Research/ShowUI/rl_ckpt_epoch1": {
+      "checkpoint_dir": "/mnt/f/USYD/Research/ShowUI/rl_ckpt_epoch1",
+      "split": "hf_test_full",
+      "metrics": {
+        "desktop": {
+          "icon": {
+            "success_rate": 0.5714285714285714,
+            "total": 140
+          },
+          "text": {
+            "success_rate": 0.7371134020618557,
+            "total": 194
+          }
+        },
+        "mobile": {
+          "icon": {
+            "success_rate": 0.7292576419213974,
+            "total": 229
+          },
+          "text": {
+            "success_rate": 0.9304029304029304,
+            "total": 273
+          }
+        },
+        "web": {
+          "text": {
+            "success_rate": 0.7956521739130434,
+            "total": 230
+          },
+          "icon": {
+            "success_rate": 0.5825242718446602,
+            "total": 206
+          }
+        },
+        "overall": {
+          "success_rate": 0.7444968553459119,
+          "total": 1272
+        }
+      }
+    }
+  },
+  "best_checkpoint": {
+    "path": "/mnt/f/USYD/Research/ShowUI/rl_ckpt_best",
+    "overall_success_rate": 0.764937106918239
+  }
+}

@@ -5,6 +5,7 @@ Outputs detailed per-split success rates and saves results to JSON.
 """
 import os
 import ast
+import re
 import json
 import argparse
 import torch
@@ -19,11 +20,17 @@ def within_bbox(point, bbox):
 
 
 def parse_coord(output_text):
-    """Parse model output to extract [x, y] coordinates."""
+    """Parse model output to extract [x, y] coordinates with a regex fallback."""
     try:
         xy = ast.literal_eval(output_text)
         if isinstance(xy, (list, tuple)) and len(xy) == 2:
             return float(xy[0]), float(xy[1])
+    except Exception:
+        pass
+    try:
+        m = re.search(r"[\[\(]?\s*([-+]?[0-9]*\.?[0-9]+)\s*,\s*([-+]?[0-9]*\.?[0-9]+)\s*[\]\)]?", output_text)
+        if m:
+            return float(m.group(1)), float(m.group(2))
     except Exception:
         pass
     return float("nan"), float("nan")
@@ -169,11 +176,7 @@ def main():
     max_pixels = args.max_visual_tokens * 28 * 28
 
     print(f"Loading model: {args.model_id}")
-    processor = AutoProcessor.from_pretrained(
-        args.model_id if os.path.isdir(args.model_id) else "showlab/ShowUI-2B",
-        min_pixels=min_pixels,
-        max_pixels=max_pixels,
-    )
+    processor = AutoProcessor.from_pretrained(args.model_id, min_pixels=min_pixels, max_pixels=max_pixels)
     model = Qwen2VLForConditionalGeneration.from_pretrained(args.model_id, torch_dtype=dtype, device_map="auto")
 
     results = evaluate_screenspot(
