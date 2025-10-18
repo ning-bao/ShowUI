@@ -355,6 +355,7 @@ def reinforce_step_multiturn(model, processor, device, batch, args: MTRLArgs):
     kl_terms: List[float] = []
 
     sample_pairs = []
+    reward_means: List[float] = []
 
     has_ref = getattr(args, "_ref_logits_fn", None) is not None and args.kl_coef > 0.0
 
@@ -362,6 +363,11 @@ def reinforce_step_multiturn(model, processor, device, batch, args: MTRLArgs):
         texts, proc_batches, gen_ids, decoded, rewards = generate_multiturn_trajectory(
             model, processor, device, instruction, image_path, tgt_xy, args
         )
+        # track mean per-turn reward for this trajectory
+        try:
+            reward_means.append(float(np.mean(rewards)) if len(rewards) else 0.0)
+        except Exception:
+            reward_means.append(0.0)
 
         # discounted returns and advantages for this trajectory
         G: List[float] = [0.0 for _ in rewards]
@@ -463,12 +469,8 @@ def reinforce_step_multiturn(model, processor, device, batch, args: MTRLArgs):
     if not torch.isfinite(loss):
         loss = torch.nan_to_num(policy_loss, nan=0.0, posinf=1e4, neginf=1e4)
 
-    avg_reward = float(policy_loss.detach().item()) * 0.0
-    try:
-        # approximate: mean of last collected entropies is logged separately; reward use per-turn shaping average is costly here
-        avg_reward = float(np.mean(entropies)) if len(entropies) else 0.0
-    except Exception:
-        pass
+    # Average of mean per-turn rewards across batch
+    avg_reward = float(np.mean(reward_means)) if len(reward_means) else 0.0
 
     return loss, avg_reward, entropy_mean, kl_mean, sample_pairs
 
