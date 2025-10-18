@@ -37,15 +37,15 @@ class MTRLArgs:
     dataset_dir: str
     train_dataset: str = "showui-desktop"
     train_json: str = "hf_train"
-    min_visual_tokens: int = 256
-    max_visual_tokens: int = 1344
+    min_visual_tokens: int = 192
+    max_visual_tokens: int = 640
     model_id: str = "showlab/ShowUI-2B"
     lr: float = 5e-6
     batch_size: int = 1
     steps_per_epoch: int = 200
     epochs: int = 1
     # decoding
-    max_new_tokens: int = 32
+    max_new_tokens: int = 24
     temperature: float = 0.7
     top_p: float = 0.0
     top_k: int = 0
@@ -56,12 +56,12 @@ class MTRLArgs:
     entropy_coef_start: float = 0.01
     entropy_coef_end: float = 0.0
     # multi-turn params
-    turns_per_traj: int = 3
+    turns_per_traj: int = 2
     gamma: float = 0.99
     # reward shaping
-    tau_success: float = 0.06
+    tau_success: float = 0.08
     tau_success_end: float = 0.06
-    alpha_dist: float = 1.0
+    alpha_dist: float = 0.5
     alpha_dist_end: float = 1.0
     # training
     grad_accum_steps: int = 1
@@ -81,7 +81,7 @@ class MTRLArgs:
     ref_model_8bit: bool = True
     # misc
     seed: int = 42
-    warmup_steps: int = 200
+    warmup_steps: int = 50
     resume_from: str = ""
     save_optimizer: bool = True
     eval_split: str = "hf_test_full"
@@ -498,11 +498,11 @@ def main():
     parser.add_argument("--steps_per_epoch", type=int, default=200)
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--lr", type=float, default=5e-6)
-    parser.add_argument("--tau_success", type=float, default=0.06)
+    parser.add_argument("--tau_success", type=float, default=0.08)
     parser.add_argument("--tau_success_end", type=float, default=0.06)
-    parser.add_argument("--alpha_dist", type=float, default=1.0)
+    parser.add_argument("--alpha_dist", type=float, default=0.5)
     parser.add_argument("--alpha_dist_end", type=float, default=1.0)
-    parser.add_argument("--max_new_tokens", type=int, default=32)
+    parser.add_argument("--max_new_tokens", type=int, default=24)
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--temperature_end", type=float, default=0.7)
     parser.add_argument("--top_p", type=float, default=0.0)
@@ -516,8 +516,8 @@ def main():
     parser.add_argument("--ref_model_id", type=str, default="")
     parser.add_argument("--ref_model_8bit", action="store_true")
     parser.add_argument("--model_id", type=str, default="showlab/ShowUI-2B")
-    parser.add_argument("--min_visual_tokens", type=int, default=256)
-    parser.add_argument("--max_visual_tokens", type=int, default=896)
+    parser.add_argument("--min_visual_tokens", type=int, default=192)
+    parser.add_argument("--max_visual_tokens", type=int, default=640)
     parser.add_argument("--gradient_checkpointing", action="store_true")
     parser.add_argument("--load_in_8bit", action="store_true")
     parser.add_argument("--log_dir", type=str, default="./runs/rl-mt")
@@ -530,8 +530,8 @@ def main():
     parser.add_argument("--log_samples_every", type=int, default=100)
     parser.add_argument("--log_hist_every", type=int, default=100)
     parser.add_argument("--save_best", action="store_true")
-    parser.add_argument("--warmup_steps", type=int, default=200)
-    parser.add_argument("--turns_per_traj", type=int, default=3)
+    parser.add_argument("--warmup_steps", type=int, default=50)
+    parser.add_argument("--turns_per_traj", type=int, default=2)
     parser.add_argument("--gamma", type=float, default=0.99)
     args_ns = parser.parse_args()
 
