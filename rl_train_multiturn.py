@@ -60,7 +60,9 @@ class MTRLArgs:
     gamma: float = 0.99
     # reward shaping
     tau_success: float = 0.06
+    tau_success_end: float = 0.06
     alpha_dist: float = 1.0
+    alpha_dist_end: float = 1.0
     # training
     grad_accum_steps: int = 1
     gradient_checkpointing: bool = False
@@ -356,6 +358,7 @@ def reinforce_step_multiturn(model, processor, device, batch, args: MTRLArgs):
 
     sample_pairs = []
     reward_means: List[float] = []
+    all_turn_rewards: List[float] = []
 
     has_ref = getattr(args, "_ref_logits_fn", None) is not None and args.kl_coef > 0.0
 
@@ -368,6 +371,8 @@ def reinforce_step_multiturn(model, processor, device, batch, args: MTRLArgs):
             reward_means.append(float(np.mean(rewards)) if len(rewards) else 0.0)
         except Exception:
             reward_means.append(0.0)
+        # collect for global stats
+        all_turn_rewards.extend(rewards)
 
         # discounted returns and advantages for this trajectory
         G: List[float] = [0.0 for _ in rewards]
@@ -471,8 +476,15 @@ def reinforce_step_multiturn(model, processor, device, batch, args: MTRLArgs):
 
     # Average of mean per-turn rewards across batch
     avg_reward = float(np.mean(reward_means)) if len(reward_means) else 0.0
+    # Stats for logging
+    if len(all_turn_rewards):
+        rmin = float(np.min(all_turn_rewards))
+        rmax = float(np.max(all_turn_rewards))
+        succ_rate = float(np.mean([1.0 if r > 0.0 else 0.0 for r in all_turn_rewards]))
+    else:
+        rmin, rmax, succ_rate = 0.0, 0.0, 0.0
 
-    return loss, avg_reward, entropy_mean, kl_mean, sample_pairs
+    return loss, avg_reward, entropy_mean, kl_mean, sample_pairs, rmin, rmax, succ_rate
 
 
 def main():
@@ -709,6 +721,8 @@ def main():
     if not hasattr(args, "_sched_init"):
         object.__setattr__(args, "_temp_start", float(args.temperature))
         object.__setattr__(args, "_entropy_start", float(args.entropy_coef_start))
+        object.__setattr__(args, "_tau_start", float(args.tau_success))
+        object.__setattr__(args, "_alpha_start", float(args.alpha_dist))
         object.__setattr__(args, "_sched_init", True)
 
     for epoch in range(start_epoch, args.epochs):
@@ -725,11 +739,20 @@ def main():
             object.__setattr__(args, "temperature", temperature_now)
             entropy_now = float(args._entropy_start + (args.entropy_coef_end - args._entropy_start) * progress)
             object.__setattr__(args, "entropy_coef_start", entropy_now)
+            # reward schedules
+            tau_now = float(args._tau_start + (args.tau_success_end - args._tau_start) * progress)
+            alpha_now = float(args._alpha_start + (args.alpha_dist_end - args._alpha_start) * progress)
+            object.__setattr__(args, "tau_success", tau_now)
+            object.__setattr__(args, "alpha_dist", alpha_now)
 
             accum_loss = 0.0
             accum_reward = 0.0
             accum_entropy = 0.0
             accum_kl = 0.0
+            # stats across micro-steps
+            batch_reward_min = float("inf")
+            batch_reward_max = float("-inf")
+            batch_success_rate = []
 
             optimizer.zero_grad(set_to_none=True)
             for micro in range(max(1, args.grad_accum_steps)):
@@ -755,12 +778,15 @@ def main():
                 if not batch_items:
                     continue
 
-                loss_tensor, reward, ent, kl, sample_pairs = reinforce_step_multiturn(model, processor, device, batch_items, args)
+                loss_tensor, reward, ent, kl, sample_pairs, rmin, rmax, succ_rate = reinforce_step_multiturn(model, processor, device, batch_items, args)
                 (loss_tensor / max(1, args.grad_accum_steps)).backward()
                 accum_loss += float(loss_tensor.item())
                 accum_reward += reward
                 accum_entropy += ent
                 accum_kl += kl
+                batch_reward_min = min(batch_reward_min, rmin)
+                batch_reward_max = max(batch_reward_max, rmax)
+                batch_success_rate.append(succ_rate)
 
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
@@ -769,15 +795,19 @@ def main():
             reward = accum_reward / max(1, args.grad_accum_steps)
             ent = accum_entropy / max(1, args.grad_accum_steps)
             kl = accum_kl / max(1, args.grad_accum_steps)
+            succ = float(np.mean(batch_success_rate)) if len(batch_success_rate) else 0.0
 
             running_loss += loss
             running_reward += reward
             running_entropy += ent
             running_kl += kl
-            pbar.set_postfix({"loss": f"{loss:.4f}", "reward": f"{reward:.3f}", "H": f"{ent:.3f}", "KL": f"{kl:.3f}"})
+            pbar.set_postfix({"loss": f"{loss:.4f}", "reward": f"{reward:.3f}", "H": f"{ent:.3f}", "succ": f"{succ:.2f}"})
             if writer:
                 writer.add_scalar("train/loss", loss, global_step)
                 writer.add_scalar("train/reward", reward, global_step)
+                writer.add_scalar("train/reward_min", float(batch_reward_min if batch_reward_min != float("inf") else 0.0), global_step)
+                writer.add_scalar("train/reward_max", float(batch_reward_max if batch_reward_max != float("-inf") else 0.0), global_step)
+                writer.add_scalar("train/success_turn_rate", succ, global_step)
                 writer.add_scalar("train/entropy", ent, global_step)
                 if args.kl_coef > 0.0:
                     writer.add_scalar("train/kl", kl, global_step)
