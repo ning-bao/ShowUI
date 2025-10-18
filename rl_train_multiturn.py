@@ -573,14 +573,20 @@ def main():
     min_pixels = args.min_visual_tokens * 28 * 28
     max_pixels = args.max_visual_tokens * 28 * 28
 
-    processor = AutoProcessor.from_pretrained(args.model_id, min_pixels=min_pixels, max_pixels=max_pixels)
+    processor = AutoProcessor.from_pretrained(args.model_id, min_pixels=min_pixels, max_pixels=max_pixels, use_fast=False)
     if args.load_in_8bit:
-        quantization_config = BitsAndBytesConfig(load_in_8bit=True)
-        model = Qwen2VLForConditionalGeneration.from_pretrained(
-            args.model_id,
-            quantization_config=quantization_config,
-            device_map="auto",
-        )
+        try:
+            quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+            model = Qwen2VLForConditionalGeneration.from_pretrained(
+                args.model_id,
+                quantization_config=quantization_config,
+                device_map="auto",
+            )
+        except Exception as e:
+            print(f"8-bit load failed ({e}); falling back to non-quantized load.")
+            args.load_in_8bit = False
+            model = Qwen2VLForConditionalGeneration.from_pretrained(args.model_id, torch_dtype=torch_dtype)
+            model.to(device)
     else:
         model = Qwen2VLForConditionalGeneration.from_pretrained(args.model_id, torch_dtype=torch_dtype)
         model.to(device)
@@ -601,12 +607,18 @@ def main():
         try:
             ref_id = args.ref_model_id if args.ref_model_id else args.model_id
             if args.ref_model_8bit:
-                ref_qconf = BitsAndBytesConfig(load_in_8bit=True)
-                ref_model = Qwen2VLForConditionalGeneration.from_pretrained(
-                    ref_id,
-                    quantization_config=ref_qconf,
-                    device_map="auto",
-                )
+                try:
+                    ref_qconf = BitsAndBytesConfig(load_in_8bit=True)
+                    ref_model = Qwen2VLForConditionalGeneration.from_pretrained(
+                        ref_id,
+                        quantization_config=ref_qconf,
+                        device_map="auto",
+                    )
+                except Exception as e:
+                    print(f"Ref 8-bit load failed ({e}); falling back to non-quantized ref.")
+                    args.ref_model_8bit = False
+                    ref_model = Qwen2VLForConditionalGeneration.from_pretrained(ref_id, torch_dtype=torch_dtype)
+                    ref_model.to(device)
             else:
                 ref_model = Qwen2VLForConditionalGeneration.from_pretrained(ref_id, torch_dtype=torch_dtype)
                 ref_model.to(device)
