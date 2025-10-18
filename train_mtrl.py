@@ -36,6 +36,7 @@ import torch.nn.functional as F
 from torch.optim import AdamW
 from PIL import Image
 from tqdm import tqdm
+import math
 
 from transformers import AutoProcessor, Qwen2VLForConditionalGeneration, BitsAndBytesConfig
 from torch.utils.tensorboard import SummaryWriter
@@ -434,8 +435,20 @@ def main():
 
     min_pixels = args.min_visual_tokens * 28 * 28
     max_pixels = args.max_visual_tokens * 28 * 28
-    processor = AutoProcessor.from_pretrained(args.model_id, min_pixels=min_pixels, max_pixels=max_pixels)
+    # derive edges from visual token budgets (keeps grids ~within range)
+    def _edge_from_tokens(n_tokens: int) -> int:
+        # 28 is Qwen2-VL patch; clamp to at least 224 so we don’t go too tiny
+        e = 28 * math.ceil(math.sqrt(max(1, n_tokens)))
+        return max(224, int(e))
 
+    shortest_edge = _edge_from_tokens(args.min_visual_tokens)   # e.g., 160t -> ~354px (clamped to 224)
+    longest_edge  = _edge_from_tokens(args.max_visual_tokens)   # e.g., 640t -> ~709px
+
+    processor = AutoProcessor.from_pretrained(
+        args.model_id,
+        use_fast=args.use_fast_processor,
+        size={"shortest_edge": shortest_edge, "longest_edge": longest_edge},
+    )
     # Base policy
     if args.load_in_8bit:
         qconf = BitsAndBytesConfig(load_in_8bit=True)
