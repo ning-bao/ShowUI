@@ -19,5 +19,5 @@ test_miniwob.py
 # Personal
 push.sh
 
-rl_ckpt/
+rl_ckpt*/
 showui-2b/
