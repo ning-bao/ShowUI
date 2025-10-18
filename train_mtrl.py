@@ -1,6 +1,30 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+"""
+Multi-Turn RL (MTRL) trainer for ShowUI-2B (Qwen2VL) with PPO-Clip.
+
+Key features:
+- Multi-turn episodes with synthetic directional feedback (offline from bbox).
+- Shaped rewards (success, improvement, step penalty; curriculum on tau).
+- PPO-Clip with GAE, value head on top of the base model.
+- Optional KL tether to a reference policy (set --kl_coef > 0).
+- Robust dtype/device handling (no BF16/FP32 mismatches).
+- Greedy warmup; sampling args passed only when do_sample=True.
+- Evaluation on ScreenSpot subset (if present).
+
+Run (smoke test):
+  python train_mtrl.py \
+    --dataset_dir "$DATA_DIR" \
+    --train_dataset showui-desktop \
+    --train_json hf_train \
+    --epochs 1 --steps_per_epoch 5 \
+    --batch_size_episodes 2 --minibatches 2 \
+    --horizon 3 --improvement_scale 0.6 \
+    --temperature 0.7 --temperature_end 0.6 \
+    --tau_success 0.06 --tau_success_end 0.05
+"""
+
 import os, re, ast, math, time, json, random
 from dataclasses import dataclass
 from typing import List, Tuple, Dict, Any, Optional
@@ -16,7 +40,7 @@ from tqdm import tqdm
 from transformers import AutoProcessor, Qwen2VLForConditionalGeneration, BitsAndBytesConfig
 from torch.utils.tensorboard import SummaryWriter
 
-# === Your project utilities ===
+# === Project utilities (must exist in your repo) ===
 from data.dset_shared_grounding import dataset_mapping
 from data.template.shared_grounding import grounding_to_qwen
 from data.data_utils import IGNORE_INDEX
@@ -44,8 +68,8 @@ class Args:
     # Multi-turn
     horizon: int = 4                  # max steps per episode
     step_penalty: float = 0.01        # small negative each step
-    tau_success: float = 0.06         # success if inside bbox (or within tau of center)
-    tau_success_end: float = 0.04     # tighten over training (curriculum)
+    tau_success: float = 0.06         # success if inside bbox or close to center
+    tau_success_end: float = 0.04     # tighten during training
     improvement_scale: float = 0.5    # weight for distance improvement reward
     clip_improvement: float = 0.15    # clip per-step improvement bonus
 
@@ -76,7 +100,7 @@ class Args:
 
     # Training schedule
     epochs: int = 3
-    steps_per_epoch: int = 200        # PPO updates per epoch (each doing 1 rollout batch)
+    steps_per_epoch: int = 200        # PPO updates per epoch (each does one rollout batch)
     seed: int = 42
 
     # Logging / saving
@@ -151,7 +175,6 @@ def in_bbox(pred_xy: Tuple[float, float], bbox_rel: Tuple[float, float, float, f
 def dir_feedback(pred: Tuple[float, float], bbox_center: Tuple[float, float]) -> str:
     dx = bbox_center[0] - pred[0]
     dy = bbox_center[1] - pred[1]
-    # coarse bins for human-ish hints
     def bucket(v):
         av = abs(v)
         if av < 0.02: return "slightly"
@@ -168,7 +191,7 @@ def dir_feedback(pred: Tuple[float, float], bbox_center: Tuple[float, float]) ->
 def make_messages(processor, img: Image.Image, instruction: str, history: List[Tuple[str, str]], min_pixels: int, max_pixels: int):
     """
     history: list of (assistant_text, user_feedback_text) for previous turns.
-    We include the image only in the first user message.
+    Image is included once in the first user turn.
     """
     content = [
         {"type": "text",
@@ -191,7 +214,10 @@ class PVModel(nn.Module):
     def __init__(self, base: Qwen2VLForConditionalGeneration, hidden_size: int):
         super().__init__()
         self.base = base
-        self.v_head = nn.Linear(hidden_size, 1)
+        ref = next(self.base.parameters())
+        self.v_head = nn.Linear(hidden_size, 1, bias=True)
+        # align value head with base dtype/device
+        self.v_head.to(device=ref.device, dtype=ref.dtype)
 
     def forward(
         self,
@@ -213,10 +239,11 @@ class PVModel(nn.Module):
 
     def value_from_hidden(self, hidden_states: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
         """
-        hidden_states: [B, T, H], idx: [B] indices of tokens to read value from (state value at prompt end)
+        hidden_states: [B, T, H], idx: [B] (positions to read state value)
         """
         B = hidden_states.size(0)
         gather = hidden_states[torch.arange(B, device=hidden_states.device), idx, :]  # [B, H]
+        gather = gather.to(self.v_head.weight.dtype)
         return self.v_head(gather).squeeze(-1)  # [B]
 
 
@@ -228,7 +255,9 @@ class StepBuf:
         "input_ids_full", "attention_mask_full", "pixel_values", "image_grid_thw",
         "prompt_len", "action_ids", "old_logp", "value", "reward", "done", "entropy"
     )
-    def __init__(self, **kw): self.__dict__.update(kw)
+    def __init__(self, **kw):
+        for k, v in kw.items():
+            setattr(self, k, v)
 
 
 # -----------------------------
@@ -264,7 +293,10 @@ def evaluate_subset(processor, model, dataset_dir: str, limit: int, device: str,
         ]
         text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         inputs = processor(text=[text], images=[img], padding=True, return_tensors="pt").to(device)
-        out = m.generate(
+        # dtype align
+        if "pixel_values" in inputs and inputs["pixel_values"] is not None:
+            inputs["pixel_values"] = inputs["pixel_values"].to(next(m.base.parameters()).dtype)
+        out = m.base.generate(
             **inputs, max_new_tokens=32, do_sample=False, num_beams=1,
             eos_token_id=processor.tokenizer.eos_token_id, use_cache=False
         )
@@ -276,6 +308,45 @@ def evaluate_subset(processor, model, dataset_dir: str, limit: int, device: str,
         ok += 1 if (not any(math.isnan(v) for v in pred)) and (gt[0] <= pred[0] <= gt[2]) and (gt[1] <= pred[1] <= gt[3]) else 0
     m.train()
     return ok / N
+
+
+# -----------------------------
+# Single-sample logp/value (robust to pixel shapes)
+# -----------------------------
+@torch.no_grad()
+def compute_logprob_value_entropy_single(model: PVModel,
+                                         input_ids_full: torch.Tensor,
+                                         attention_mask_full: torch.Tensor,
+                                         pixel_values: Optional[torch.Tensor],
+                                         image_grid_thw: Optional[torch.Tensor],
+                                         prompt_len: int,
+                                         action_ids: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Returns (seq_logp, value, entropy) for one sample.
+    """
+    out = model.forward(
+        input_ids=input_ids_full,
+        attention_mask=attention_mask_full,
+        pixel_values=pixel_values,
+        image_grid_thw=image_grid_thw,
+        output_hidden_states=True,
+    )
+    logits = out.logits[:, :-1, :]           # [1, T-1, V]
+    hidden = out.hidden_states[-1]           # [1, T, H]
+
+    pl = int(prompt_len)
+    alen = action_ids.size(0)
+    logits_gen = logits[0, pl-1: pl-1+alen, :]              # [A, V]
+    target_gen = action_ids.view(-1).to(logits_gen.device)  # [A]
+    log_probs = F.log_softmax(logits_gen, dim=-1)
+    probs = log_probs.exp()
+    tok_logp = log_probs.gather(1, target_gen.view(-1, 1)).squeeze(1)  # [A]
+    seq_logp = tok_logp.sum()                                          # scalar
+
+    tok_ent = -(probs * log_probs).sum(dim=-1).mean()                  # scalar
+
+    v = model.value_from_hidden(hidden, torch.tensor([pl-1], device=hidden.device))  # [1]
+    return seq_logp.detach(), v.detach().squeeze(0), tok_ent.detach()
 
 
 # -----------------------------
@@ -351,7 +422,7 @@ def main():
     set_seed(args.seed)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    torch_dtype = torch.bfloat16 if device == "cuda" else torch.float32
+    model_dtype = torch.bfloat16 if device == "cuda" else torch.float32
 
     # Speeds
     try:
@@ -371,7 +442,7 @@ def main():
         base = Qwen2VLForConditionalGeneration.from_pretrained(args.model_id, quantization_config=qconf, device_map="auto")
         hidden = base.config.hidden_size
     else:
-        base = Qwen2VLForConditionalGeneration.from_pretrained(args.model_id, torch_dtype=torch_dtype)
+        base = Qwen2VLForConditionalGeneration.from_pretrained(args.model_id, dtype=model_dtype)
         base.to(device)
         hidden = base.config.hidden_size
 
@@ -380,7 +451,8 @@ def main():
         except Exception: pass
 
     model = PVModel(base, hidden)
-    if not args.load_in_8bit: model.to(device)
+    if not args.load_in_8bit:
+        model.to(device)
 
     # Optional ref policy for KL tethering
     ref_model = None
@@ -391,9 +463,9 @@ def main():
                 rq = BitsAndBytesConfig(load_in_8bit=True)
                 ref_model = Qwen2VLForConditionalGeneration.from_pretrained(rid, quantization_config=rq, device_map="auto")
             else:
-                ref_model = Qwen2VLForConditionalGeneration.from_pretrained(rid, torch_dtype=torch_dtype).to(device)
+                ref_model = Qwen2VLForConditionalGeneration.from_pretrained(rid, dtype=model_dtype).to(device)
             ref_model.eval()
-            for p in ref_model.parameters(): p.requires_grad_(False)
+            for p_ in ref_model.parameters(): p_.requires_grad_(False)
         except Exception as e:
             print(f"[KL] ref model load failed, disabling KL: {e}")
             args.kl_coef = 0.0
@@ -402,10 +474,8 @@ def main():
     img_dir, samples = load_split_items(args.dataset_dir, args.train_dataset, args.train_json)
     print(f"Loaded {len(samples)} samples from {args.train_dataset}/{args.train_json}")
 
-    # Opt
+    # Opt / logs
     optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-
-    # Logs
     os.makedirs(args.log_dir, exist_ok=True)
     writer = SummaryWriter(log_dir=args.log_dir)
 
@@ -417,61 +487,23 @@ def main():
     global_step = 0
     best_sr = -1.0
 
-    # --- helpers for logprob/value on states & actions ---
-    def compute_logprob_and_value(input_ids_full, attention_mask_full, pixel_values, image_grid_thw, prompt_lens, action_ids):
-        """
-        Returns: logp (B), value (B), entropy (B)
-        """
-        out = model.forward(
-            input_ids=input_ids_full,
-            attention_mask=attention_mask_full,
-            pixel_values=pixel_values,
-            image_grid_thw=image_grid_thw,
-            output_hidden_states=True,
-        )
-        logits = out.logits[:, :-1, :]  # next-token logits
-        hidden = out.hidden_states[-1]   # [B, T, H]
+    # --- helpers ---
+    def sample_item_with_element():
+        item = None
+        while item is None:
+            cand = random.choice(samples)
+            if cand.get("element"): item = cand
+        return item
 
-        B = input_ids_full.size(0)
-        logp_list, ent_list, val_list = [], [], []
-        for i in range(B):
-            pl = int(prompt_lens[i].item())
-            alen = action_ids[i].size(0)
-
-            logits_gen = logits[i, pl-1: pl-1+alen, :]            # [alen, V]
-            target_gen = action_ids[i].to(logits_gen.device)       # [alen]
-            log_probs = F.log_softmax(logits_gen, dim=-1)
-            probs = log_probs.exp()
-            tok_logp = log_probs.gather(1, target_gen.view(-1, 1)).squeeze(1)
-            seq_logp = tok_logp.sum()
-
-            # token entropy mean
-            tok_ent = -(probs * log_probs).sum(dim=-1).mean()
-
-            # state value at prompt end token
-            v = model.value_from_hidden(hidden[i:i+1], torch.tensor([pl-1], device=hidden.device))
-
-            logp_list.append(seq_logp)
-            ent_list.append(tok_ent)
-            val_list.append(v.squeeze(0))
-
-        return torch.stack(logp_list), torch.stack(val_list), torch.stack(ent_list)
-
-    # --- Rollout function (offline multi-turn with synthetic feedback) ---
     def rollout_batch():
         """
-        Collects args.batch_size_episodes episodes with up to args.horizon steps each.
+        Collect args.batch_size_episodes episodes with up to args.horizon steps each.
         Returns list[StepBuf]
         """
         bufs: List[StepBuf] = []
 
         for _ in range(args.batch_size_episodes):
-            # sample an item with at least one element
-            item = None
-            while item is None:
-                cand = random.choice(samples)
-                if cand.get("element"): item = cand
-
+            item = sample_item_with_element()
             image_path = os.path.join(img_dir, item["img_url"])
             img = Image.open(image_path).convert("RGB")
             img_w, img_h = item.get("img_size", img.size)
@@ -483,7 +515,6 @@ def main():
 
             history: List[Tuple[str, str]] = []
             prev_dist = None
-            done = False
 
             for t in range(args.horizon):
                 # Build conversation
@@ -494,7 +525,7 @@ def main():
                         inputs[k] = inputs[k].to(device)
                 prompt_len = inputs["input_ids"].shape[1]
 
-                # Gen kwargs (with warmup greedy)
+                # Gen kwargs (greedy warmup)
                 progress = (global_step + 1) / max(1, total_updates)
                 temperature_now = temp_start + (args.temperature_end - temp_start) * progress
                 tau_now = tau_start + (args.tau_success_end - tau_start) * progress
@@ -502,30 +533,33 @@ def main():
 
                 gen_kwargs = dict(
                     max_new_tokens=args.max_new_tokens,
-                    do_sample=do_sample, temperature=max(1e-4, float(temperature_now)),
-                    top_p=args.top_p if args.top_p > 0 else None,
-                    top_k=args.top_k if args.top_k > 0 else None,
+                    do_sample=do_sample,
                     num_beams=args.num_beams,
                     eos_token_id=processor.tokenizer.eos_token_id,
                     use_cache=True,
                 )
-                # Trim None keys
-                gen_kwargs = {k: v for k, v in gen_kwargs.items() if v is not None}
+                if do_sample:
+                    gen_kwargs["temperature"] = max(1e-4, float(temperature_now))
+                    if args.top_p and args.top_p > 0: gen_kwargs["top_p"] = float(args.top_p)
+                    if args.top_k and args.top_k > 0: gen_kwargs["top_k"] = int(args.top_k)
+
+                # dtype align for pixels
+                if "pixel_values" in inputs and inputs["pixel_values"] is not None:
+                    inputs["pixel_values"] = inputs["pixel_values"].to(next(model.base.parameters()).dtype)
 
                 with torch.no_grad():
                     gen_out = model.base.generate(**inputs, **gen_kwargs)
+
                 action_ids = gen_out[:, prompt_len:]  # [1, A]
                 decoded = processor.batch_decode(action_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
                 pred = parse_coord(decoded)
 
-                # Rewards
-                # success if inside bbox; otherwise shaped by distance improvement
+                # Reward shaping
                 if any(math.isnan(v) for v in pred):
                     cur_dist = 1.0
                     success = False
-                    rew = -0.5  # invalid format
+                    rew = -0.5  # invalid
                 else:
-                    # distance to bbox center
                     cur_dist = l2(pred, center_rel)
                     x1, y1, x2, y2 = bbox_rel
                     success = in_bbox(pred, bbox_rel) or (cur_dist < tau_now)
@@ -537,24 +571,26 @@ def main():
                         else:
                             improv = max(-args.clip_improvement, min(args.clip_improvement, (prev_dist - cur_dist)))
                             rew = args.improvement_scale * improv - 0.1 * cur_dist
-                # step penalty
                 rew -= args.step_penalty
 
-                # Build full input for scoring (prompt + action)
+                # Build full input for scoring
                 input_ids_full = torch.cat([inputs["input_ids"], action_ids], dim=1)
                 attention_mask_full = (input_ids_full != processor.tokenizer.pad_token_id).long()
 
-                # Ensure float dtype matches base
                 pixel_values = inputs.get("pixel_values", None)
                 if pixel_values is not None:
                     pixel_values = pixel_values.to(next(model.base.parameters()).dtype)
 
-                # Old logp / value / entropy (no grad)
-                with torch.no_grad():
-                    old_logp, value, entropy = compute_logprob_and_value(
-                        input_ids_full, attention_mask_full, pixel_values, inputs.get("image_grid_thw"), 
-                        torch.tensor([prompt_len], device=device), action_ids
-                    )
+                # Old logp / value / entropy (single-sample)
+                old_logp, value, entropy = compute_logprob_value_entropy_single(
+                    model=model,
+                    input_ids_full=input_ids_full,
+                    attention_mask_full=attention_mask_full,
+                    pixel_values=pixel_values,
+                    image_grid_thw=inputs.get("image_grid_thw"),
+                    prompt_len=prompt_len,
+                    action_ids=action_ids[0].detach().cpu()
+                )
 
                 bufs.append(StepBuf(
                     input_ids_full=input_ids_full.detach(),
@@ -562,15 +598,15 @@ def main():
                     pixel_values=pixel_values.detach() if pixel_values is not None else None,
                     image_grid_thw=inputs.get("image_grid_thw"),
                     prompt_len=torch.tensor([prompt_len], device=device),
-                    action_ids=action_ids[0].detach().cpu(),  # store 1D
-                    old_logp=old_logp.detach(),
-                    value=value.detach(),
+                    action_ids=action_ids[0].detach().cpu(),
+                    old_logp=old_logp.detach().view(1),
+                    value=value.detach().unsqueeze(0),
                     reward=torch.tensor([float(rew)], device=device),
                     done=torch.tensor([1.0 if success or t == args.horizon - 1 else 0.0], device=device),
-                    entropy=entropy.detach(),
+                    entropy=entropy.detach().unsqueeze(0),
                 ))
 
-                # Prepare feedback and possibly continue
+                # Prepare feedback & continue
                 feedback = "Success. Stop." if success else dir_feedback(pred, center_rel)
                 history.append((decoded, feedback))
                 prev_dist = cur_dist
@@ -579,16 +615,13 @@ def main():
 
         return bufs
 
-    # --- GAE & PPO update ---
     def ppo_update(bufs: List[StepBuf]):
-        # Group into trajectories (episodes are contiguous groups of 'done')
-        # For simplicity, treat the whole buffer as a flat sequence and do GAE reset on done.
+        # Flatten sequences; compute GAE with episode boundaries indicated by done flags
         rewards = torch.cat([b.reward for b in bufs]).to(device)        # [N]
         dones   = torch.cat([b.done   for b in bufs]).to(device)         # [N]
-        values  = torch.cat([b.value  for b in bufs]).to(device)         # [N]
-        entropies = torch.cat([b.entropy for b in bufs]).to(device)      # [N]
+        values  = torch.cat([b.value  for b in bufs]).to(device).squeeze(-1)  # [N]
+        entropies = torch.cat([b.entropy for b in bufs]).to(device).squeeze(-1)  # [N]
 
-        # Bootstrap last value as 0 at episode boundary
         advantages = torch.zeros_like(rewards)
         lastgaelam = 0.0
         next_value = 0.0
@@ -597,15 +630,12 @@ def main():
             delta = rewards[t] + args.gae_gamma * next_value * mask - values[t]
             lastgaelam = delta + args.gae_gamma * args.gae_lambda * mask * lastgaelam
             advantages[t] = lastgaelam
-            next_value = values[t].item()  # next step's "next_value" is current value
-
+            next_value = values[t].item()
         returns = advantages + values
         advantages = (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1e-8)
 
-        # Precompute old logps tensor
-        old_logps = torch.cat([b.old_logp for b in bufs]).to(device).squeeze(1)
+        old_logps = torch.cat([b.old_logp for b in bufs]).to(device).view(-1)  # [N]
 
-        # Build mini-batches of indices
         N = len(bufs)
         idxs = np.arange(N)
         mb_size = max(1, N // args.minibatches)
@@ -618,79 +648,75 @@ def main():
                 mb_idx = idxs[mb_start: mb_start + mb_size]
                 if len(mb_idx) == 0: continue
 
-                # Batch tensors
-                input_ids_full = torch.nn.utils.rnn.pad_sequence(
-                    [bufs[i].input_ids_full[0] for i in mb_idx], batch_first=True, padding_value=processor.tokenizer.pad_token_id
-                ).to(device)
-                attention_mask_full = (input_ids_full != processor.tokenizer.pad_token_id).long()
-
-                # Prompt lens & actions
-                prompt_lens = torch.tensor([int(bufs[i].prompt_len.item()) for i in mb_idx], device=device)
-                # Build action matrix with padding
-                act_list = [bufs[i].action_ids for i in mb_idx]
-                max_a = max(a.size(0) for a in act_list)
-                action_mat = torch.full((len(mb_idx), max_a), processor.tokenizer.pad_token_id, dtype=torch.long, device=device)
-                for r, a in enumerate(act_list):
-                    action_mat[r, :a.size(0)] = a.to(device)
-
-                # Pixel batch? We collected single-image steps; replicate if needed
-                if bufs[mb_idx[0]].pixel_values is not None:
-                    # Re-encode pixel batch by rerunning processor is expensive; we instead reuse 1-image batch and tile
-                    pix = bufs[mb_idx[0]].pixel_values  # [1, C, H, W]
-                    pixel_values = pix.expand(len(mb_idx), *pix.shape[1:]).contiguous()
-                else:
-                    pixel_values = None
-
-                # New logp / value / entropy
-                logp, value, entropy = compute_logprob_and_value(input_ids_full, attention_mask_full, pixel_values, None, prompt_lens, action_mat)
-                logp = logp.to(device)
-                value = value.to(device)
-                entropy = entropy.to(device)
-
-                # KL to ref (optional)
-                kl_loss = torch.tensor(0.0, device=device)
-                if args.kl_coef > 0 and (ref_model is not None):
-                    with torch.no_grad():
-                        ref_out = ref_model(
-                            input_ids=input_ids_full,
-                            attention_mask=attention_mask_full,
-                            pixel_values=pixel_values,
-                            use_cache=False
-                        )
-                        ref_logits = ref_out.logits[:, :-1, :]
-                    # compute per-token KL over generated window
-                    kl_terms = []
-                    for b in range(len(mb_idx)):
-                        pl = prompt_lens[b].item()
-                        al = (act_list[b].size(0))
-                        lp = F.log_softmax(logp.new_zeros(1), dim=-1)  # dummy to fix linter
-                        # Build policy logits again for this batch slice
-                        # (We already computed policy logp above; KL here is coarse avg over the generated segment)
-                        pol_out = model.forward(
-                            input_ids=input_ids_full[b:b+1],
-                            attention_mask=attention_mask_full[b:b+1],
-                            pixel_values=pixel_values[b:b+1] if pixel_values is not None else None,
-                            output_hidden_states=False,
-                        )
-                        pol_logits = pol_out.logits[:, :-1, :]
-                        p = F.log_softmax(pol_logits[0, pl-1:pl-1+al, :], dim=-1).exp()
-                        ql = F.log_softmax(ref_logits[b, pl-1:pl-1+al, :], dim=-1)
-                        kl_tok = (p * (torch.log(p + 1e-12) - ql)).sum(dim=-1).mean()
-                        kl_terms.append(kl_tok)
-                    if len(kl_terms) > 0:
-                        kl_loss = torch.stack(kl_terms).mean()
-
-                # PPO losses
                 mb_adv = advantages[mb_idx].to(device)
                 mb_ret = returns[mb_idx].to(device)
                 mb_old = old_logps[mb_idx].to(device)
 
-                ratio = torch.exp(logp - mb_old)
+                # Compute new logp/value/entropy per sample (robust to pixel shape)
+                new_logps, new_vals, new_ents = [], [], []
+                kl_term_list = []
+
+                for i in mb_idx:
+                    b = bufs[i]
+                    # pad as batch=1
+                    input_ids_full = b.input_ids_full.to(device)
+                    attention_mask_full = b.attention_mask_full.to(device)
+                    pixel_values = b.pixel_values.to(device) if b.pixel_values is not None else None
+                    prompt_len = int(b.prompt_len.item())
+                    action_ids = b.action_ids.to(device)
+
+                    # forward
+                    out = model.forward(
+                        input_ids=input_ids_full,
+                        attention_mask=attention_mask_full,
+                        pixel_values=pixel_values,
+                        image_grid_thw=b.image_grid_thw,
+                        output_hidden_states=True,
+                    )
+                    logits = out.logits[:, :-1, :]
+                    hidden = out.hidden_states[-1]
+                    alen = action_ids.size(0)
+
+                    logits_gen = logits[0, prompt_len-1: prompt_len-1+alen, :]  # [A, V]
+                    log_probs = F.log_softmax(logits_gen, dim=-1)
+                    probs = log_probs.exp()
+                    tok_logp = log_probs.gather(1, action_ids.view(-1,1)).squeeze(1)
+                    seq_logp = tok_logp.sum()
+
+                    tok_ent = -(probs * log_probs).sum(dim=-1).mean()
+
+                    v = model.value_from_hidden(hidden, torch.tensor([prompt_len-1], device=hidden.device))
+
+                    new_logps.append(seq_logp)
+                    new_vals.append(v.squeeze(0))
+                    new_ents.append(tok_ent)
+
+                    # Optional KL regularization w.r.t ref
+                    if args.kl_coef > 0.0 and (ref_model is not None):
+                        with torch.no_grad():
+                            ref_out = ref_model(
+                                input_ids=input_ids_full,
+                                attention_mask=attention_mask_full,
+                                pixel_values=pixel_values,
+                                use_cache=False
+                            )
+                            ref_logits = ref_out.logits[:, :-1, :]
+                        p = F.log_softmax(logits[0, prompt_len-1:prompt_len-1+alen, :], dim=-1).exp()
+                        ql = F.log_softmax(ref_logits[0, prompt_len-1:prompt_len-1+alen, :], dim=-1)
+                        kl_tok = (p * (torch.log(p + 1e-12) - ql)).sum(dim=-1).mean()
+                        kl_term_list.append(kl_tok)
+
+                new_logps = torch.stack(new_logps).to(device)
+                new_vals  = torch.stack(new_vals).to(device)
+                new_ents  = torch.stack(new_ents).to(device)
+                kl_loss = torch.stack(kl_term_list).mean() if kl_term_list else torch.tensor(0.0, device=device)
+
+                ratio = torch.exp(new_logps - mb_old)
                 clipped = torch.clamp(ratio, 1.0 - args.ppo_clip, 1.0 + args.ppo_clip) * mb_adv
                 policy_loss = -(torch.min(ratio * mb_adv, clipped)).mean()
 
-                value_loss = F.mse_loss(value, mb_ret)
-                ent_loss = -entropy.mean()
+                value_loss = F.mse_loss(new_vals, mb_ret)
+                ent_loss = -new_ents.mean()
 
                 loss = policy_loss + args.vf_coef * value_loss + args.ent_coef * ent_loss + args.kl_coef * kl_loss
 
@@ -701,7 +727,7 @@ def main():
 
                 policy_losses.append(policy_loss.item())
                 value_losses.append(value_loss.item())
-                ent_losses.append(entropy.mean().item())
+                ent_losses.append(new_ents.mean().item())
                 kl_losses.append(kl_loss.item() if isinstance(kl_loss, torch.Tensor) else float(kl_loss))
 
         return (
@@ -727,15 +753,9 @@ def main():
             writer.add_scalar("train/entropy", ent, global_step)
             if args.kl_coef > 0: writer.add_scalar("train/kl", kl, global_step)
 
-            # log sample
             if args.log_samples_every and (global_step % args.log_samples_every == 0):
-                try:
-                    # Log an example conversation string
-                    writer.add_text("train/hint", "Multi-turn rollout collected; PPO updated.", global_step)
-                except Exception:
-                    pass
+                writer.add_text("train/hint", "Multi-turn rollout collected; PPO updated.", global_step)
 
-            # eval
             if args.eval_every and (global_step % args.eval_every == 0):
                 sr = evaluate_subset(processor, model, args.dataset_dir, args.eval_subset_limit, device, min_pixels, max_pixels)
                 writer.add_scalar("eval/screenspot_subset_success", sr, global_step)
@@ -757,7 +777,6 @@ def main():
             global_step += 1
 
         # End-of-epoch logs
-        pbar.close()
         try:
             writer.add_scalar("epoch/policy_loss", np.mean(epoch_pl), epoch)
             writer.add_scalar("epoch/value_loss", np.mean(epoch_vl), epoch)
@@ -783,7 +802,8 @@ def main():
             processor.save_pretrained(save_dir)
             if args.save_optimizer:
                 try:
-                    torch.save(optimizer.state_dict(), os.path.join(save_dir, "optimizer.pt"))
+                    optimizer_state = optimizer.state_dict()
+                    torch.save(optimizer_state, os.path.join(save_dir, "optimizer.pt"))
                     with open(os.path.join(save_dir, "training_state.json"), "w") as f:
                         json.dump({"epoch": epoch + 1, "global_step": global_step}, f)
                 except Exception as e:
