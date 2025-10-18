@@ -573,7 +573,17 @@ def main():
     min_pixels = args.min_visual_tokens * 28 * 28
     max_pixels = args.max_visual_tokens * 28 * 28
 
-    processor = AutoProcessor.from_pretrained(args.model_id, min_pixels=min_pixels, max_pixels=max_pixels, use_fast=False)
+    processor = None
+    try:
+        # Prefer fast processor which supports min/max pixel overrides
+        processor = AutoProcessor.from_pretrained(
+            args.model_id,
+            min_pixels=min_pixels,
+            max_pixels=max_pixels,
+        )
+    except Exception as e:
+        print(f"Processor load with min/max pixels failed ({e}); retrying with defaults.")
+        processor = AutoProcessor.from_pretrained(args.model_id)
     if args.load_in_8bit:
         try:
             quantization_config = BitsAndBytesConfig(load_in_8bit=True)
