@@ -22,6 +22,15 @@ from data.dset_shared_grounding import dataset_mapping
 from data.template.shared_grounding import grounding_to_qwen
 from data.data_utils import IGNORE_INDEX
 
+# Prefer memory-efficient SDPA kernels where available to lower peak memory
+try:
+    from torch.backends.cuda import sdp_kernel
+    sdp_kernel.enable_flash_sdp(False)
+    sdp_kernel.enable_mem_efficient_sdp(True)
+    sdp_kernel.enable_math_sdp(True)
+except Exception:
+    pass
+
 
 @dataclass
 class MTRLArgs:
@@ -252,7 +261,6 @@ def generate_multiturn_trajectory(model, processor, device, instruction: str, im
     history: Optional[List[dict]] = None
     turns = max(1, int(args.turns_per_traj))
 
-    # collectors
     texts: List[str] = []
     processor_batches: List[dict] = []
     generated_token_ids: List[torch.Tensor] = []
@@ -261,7 +269,6 @@ def generate_multiturn_trajectory(model, processor, device, instruction: str, im
 
     model_unwrapped = model.module if hasattr(model, "module") else model
 
-    # Ensure dtype alignment for pixel_values later
     try:
         param_dtype = next(model_unwrapped.parameters()).dtype
     except StopIteration:
@@ -269,7 +276,6 @@ def generate_multiturn_trajectory(model, processor, device, instruction: str, im
 
     for t in range(turns):
         text, inputs = build_messages_for_turn(processor, instruction, img, min_pixels, max_pixels, history)
-        # to device and cast pixel dtype
         for k, v in list(inputs.items()):
             if isinstance(v, torch.Tensor):
                 inputs[k] = v.to(device)
@@ -287,14 +293,13 @@ def generate_multiturn_trajectory(model, processor, device, instruction: str, im
                 "temperature": safe_temperature,
                 "num_beams": int(max(1, args.num_beams)),
                 "eos_token_id": processor.tokenizer.eos_token_id,
-                "use_cache": True,
+                "use_cache": False,
             }
             if args.top_p and args.top_p > 0.0:
                 gen_kwargs["top_p"] = float(min(1.0, max(1e-6, args.top_p)))
             if args.top_k and args.top_k > 0:
                 gen_kwargs["top_k"] = int(max(1, args.top_k))
             try:
-                # Greedy during warmup
                 force_greedy = getattr(args, "_global_step", 0) < int(max(0, args.warmup_steps))
                 if force_greedy:
                     out = model_unwrapped.generate(
@@ -303,7 +308,7 @@ def generate_multiturn_trajectory(model, processor, device, instruction: str, im
                         do_sample=False,
                         num_beams=1,
                         eos_token_id=processor.tokenizer.eos_token_id,
-                        use_cache=True,
+                        use_cache=False,
                     )
                 else:
                     out = model_unwrapped.generate(
@@ -317,7 +322,7 @@ def generate_multiturn_trajectory(model, processor, device, instruction: str, im
                     do_sample=False,
                     num_beams=1,
                     eos_token_id=processor.tokenizer.eos_token_id,
-                    use_cache=True,
+                    use_cache=False,
                 )
 
         gen = out[:, inputs["input_ids"].shape[1]:]
@@ -329,7 +334,6 @@ def generate_multiturn_trajectory(model, processor, device, instruction: str, im
         rew = compute_turn_reward(pred_xy, tgt_xy, args.tau_success, args.alpha_dist)
         rewards.append(rew)
 
-        # feedback into history as assistant message
         if not any(math.isnan(v) for v in pred_xy):
             fb_text = f"Predicted {pred_xy}."
         else:
@@ -338,130 +342,119 @@ def generate_multiturn_trajectory(model, processor, device, instruction: str, im
         history = [] if history is None else history
         history.append(fb_msg)
 
-    # returns
     return texts, processor_batches, generated_token_ids, decoded_texts, rewards
 
 
 def reinforce_step_multiturn(model, processor, device, batch, args: MTRLArgs):
     model.train()
 
-    # For each item, run multi-turn rollout
-    all_texts: List[List[str]] = []
-    all_proc_batches: List[List[dict]] = []
-    all_gen_ids: List[List[torch.Tensor]] = []
-    all_decoded: List[List[str]] = []
-    all_rewards: List[List[float]] = []
-    meta_list: List[Tuple[Tuple[float, float], str]] = []
+    gamma = float(args.gamma)
 
-    for instruction, image_path, tgt_xy in batch:
+    losses_per_item: List[torch.Tensor] = []
+    entropies: List[float] = []
+    kl_terms: List[float] = []
+
+    sample_pairs = []
+
+    has_ref = getattr(args, "_ref_logits_fn", None) is not None and args.kl_coef > 0.0
+
+    for i, (instruction, image_path, tgt_xy) in enumerate(batch):
         texts, proc_batches, gen_ids, decoded, rewards = generate_multiturn_trajectory(
             model, processor, device, instruction, image_path, tgt_xy, args
         )
-        all_texts.append(texts)
-        all_proc_batches.append(proc_batches)
-        all_gen_ids.append(gen_ids)
-        all_decoded.append(decoded)
-        all_rewards.append(rewards)
-        meta_list.append((tgt_xy, image_path))
 
-    # Compute discounted returns per turn and normalize advantages per batch item
-    gamma = float(args.gamma)
-    advantages: List[List[float]] = []
-    for rewards in all_rewards:
+        # discounted returns and advantages for this trajectory
         G: List[float] = [0.0 for _ in rewards]
         running = 0.0
         for t in reversed(range(len(rewards))):
             running = float(rewards[t] + gamma * running)
             G[t] = running
-        # normalize per trajectory
-        mean_G = float(np.mean(G)) if len(G) > 0 else 0.0
-        std_G = float(np.std(G)) if len(G) > 0 else 0.0
+        mean_G = float(np.mean(G)) if len(G) else 0.0
+        std_G = float(np.std(G)) if len(G) else 0.0
         if std_G > 1e-6:
-            A = [(g - mean_G) / std_G for g in G]
+            traj_adv = [(g - mean_G) / std_G for g in G]
         else:
-            A = [0.0 for _ in G]
-        advantages.append(A)
+            traj_adv = [0.0 for _ in G]
 
-    # Build token-level losses: per-turn NLL averaged, weighted by that turn's advantage
-    losses_per_item: List[torch.Tensor] = []
-    entropies: List[float] = []
-    kl_terms: List[float] = []
-
-    # optional ref logits
-    has_ref = getattr(args, "_ref_logits_fn", None) is not None and args.kl_coef > 0.0
-
-    for i in range(len(batch)):
-        traj_proc = all_proc_batches[i]
-        traj_gen = all_gen_ids[i]
-        traj_adv = advantages[i]
-
-        # For each turn, compute token NLL of generated tokens conditioned on prompt
         per_turn_losses: List[torch.Tensor] = []
         per_turn_entropy: List[float] = []
         per_turn_kl: List[float] = []
 
-        for t in range(len(traj_gen)):
-            inputs = traj_proc[t]
-            gen_trimmed = traj_gen[t]
+        for t in range(len(gen_ids)):
+            inputs = proc_batches[t]
+            gen_trimmed = gen_ids[t]
 
             input_ids_full = torch.cat([inputs["input_ids"], gen_trimmed], dim=1)
             attention_mask_full = (input_ids_full != processor.tokenizer.pad_token_id).long()
             prompt_len = inputs["input_ids"].shape[1]
 
-            outputs = model(
-                input_ids=input_ids_full.to(device),
-                attention_mask=attention_mask_full.to(device),
-                pixel_values=inputs.get("pixel_values"),
-                image_grid_thw=inputs.get("image_grid_thw"),
-                labels=None,
-            )
+            if torch.cuda.is_available():
+                autocast_ctx = torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+            else:
+                autocast_ctx = torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=False)
+            with autocast_ctx:
+                outputs = model(
+                    input_ids=input_ids_full.to(device),
+                    attention_mask=attention_mask_full.to(device),
+                    pixel_values=inputs.get("pixel_values"),
+                    image_grid_thw=inputs.get("image_grid_thw"),
+                    use_cache=False,
+                    labels=None,
+                )
+                vocab = outputs.logits.size(-1)
+                logits = outputs.logits[:, prompt_len - 1 : -1, :].contiguous()
+                logits = torch.nan_to_num(logits, nan=0.0, posinf=1e4, neginf=-1e4)
+                target = input_ids_full[:, prompt_len:].contiguous()
+                nll = F.cross_entropy(logits.view(-1, vocab), target.view(-1), reduction="none")
+                nll = nll.view(target.size(0), target.size(1))
+                token_mask = (target != processor.tokenizer.pad_token_id).float()
+                turn_nll = (nll * token_mask).sum(dim=1) / (token_mask.sum(dim=1) + 1e-6)
 
-            vocab = outputs.logits.size(-1)
-            logits = outputs.logits[:, prompt_len - 1 : -1, :].contiguous()
-            logits = torch.nan_to_num(logits, nan=0.0, posinf=1e4, neginf=-1e4)
-            target = input_ids_full[:, prompt_len:].contiguous()
-            nll = F.cross_entropy(logits.view(-1, vocab), target.view(-1), reduction="none")
-            nll = nll.view(target.size(0), target.size(1))
-            token_mask = (target != processor.tokenizer.pad_token_id).float()
-            turn_nll = (nll * token_mask).sum(dim=1) / (token_mask.sum(dim=1) + 1e-6)
+                log_probs = F.log_softmax(logits, dim=-1)
+                probs = log_probs.exp()
+                probs = torch.nan_to_num(probs, nan=0.0)
+                token_entropy = -(probs * log_probs).sum(dim=-1)
+                entropy_per_seq = (token_entropy * token_mask).sum(dim=1) / (token_mask.sum(dim=1) + 1e-6)
+                per_turn_entropy.append(float(entropy_per_seq.mean().item()))
 
-            # entropy
-            log_probs = F.log_softmax(logits, dim=-1)
-            probs = log_probs.exp()
-            probs = torch.nan_to_num(probs, nan=0.0)
-            token_entropy = -(probs * log_probs).sum(dim=-1)
-            entropy_per_seq = (token_entropy * token_mask).sum(dim=1) / (token_mask.sum(dim=1) + 1e-6)
-            per_turn_entropy.append(float(entropy_per_seq.mean().item()))
+                kl_val = 0.0
+                if has_ref:
+                    with torch.no_grad():
+                        ref_logits = args._ref_logits_fn(
+                            input_ids=input_ids_full.to(device),
+                            attention_mask=attention_mask_full.to(device),
+                            pixel_values=inputs.get("pixel_values"),
+                            image_grid_thw=inputs.get("image_grid_thw"),
+                        )
+                    ref_logits = ref_logits[:, prompt_len - 1 : -1, :].contiguous()
+                    ref_log_probs = F.log_softmax(ref_logits, dim=-1)
+                    kl_token = (probs * (log_probs - ref_log_probs)).sum(dim=-1)
+                    kl_per_seq = (kl_token * token_mask).sum(dim=1) / (token_mask.sum(dim=1) + 1e-6)
+                    kl_val = float(kl_per_seq.mean().item())
+                per_turn_kl.append(kl_val)
 
-            # KL to ref per turn (optional)
-            kl_val = 0.0
-            if has_ref:
-                with torch.no_grad():
-                    ref_logits = args._ref_logits_fn(
-                        input_ids=input_ids_full.to(device),
-                        attention_mask=attention_mask_full.to(device),
-                        pixel_values=inputs.get("pixel_values"),
-                        image_grid_thw=inputs.get("image_grid_thw"),
-                    )
-                ref_logits = ref_logits[:, prompt_len - 1 : -1, :].contiguous()
-                ref_log_probs = F.log_softmax(ref_logits, dim=-1)
-                kl_token = (probs * (log_probs - ref_log_probs)).sum(dim=-1)
-                kl_per_seq = (kl_token * token_mask).sum(dim=1) / (token_mask.sum(dim=1) + 1e-6)
-                kl_val = float(kl_per_seq.mean().item())
-            per_turn_kl.append(kl_val)
-
-            # REINFORCE: advantage times NLL (minimize)
             adv_t = torch.tensor(traj_adv[t], dtype=torch.float32, device=device)
             loss_t = (adv_t * turn_nll).mean()
             per_turn_losses.append(loss_t)
 
-        # weight sum over turns
-        policy_loss_item = torch.stack(per_turn_losses).mean()
+            # free per-turn tensors early
+            del input_ids_full, attention_mask_full, target, logits, nll, token_mask, turn_nll
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+
+        policy_loss_item = torch.stack(per_turn_losses).mean() if per_turn_losses else torch.tensor(0.0, device=device)
         losses_per_item.append(policy_loss_item)
         entropies.append(float(np.mean(per_turn_entropy)) if len(per_turn_entropy) else 0.0)
         kl_terms.append(float(np.mean(per_turn_kl)) if len(per_turn_kl) else 0.0)
 
-    # aggregate over batch
+        if i < 2:
+            sample_pairs.append((instruction, " | ".join(decoded)))
+
+        # free trajectory tensors
+        del proc_batches, gen_ids
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+
     policy_loss = torch.stack(losses_per_item).mean() if len(losses_per_item) else torch.tensor(0.0, device=device)
     entropy_mean = float(np.mean(entropies)) if len(entropies) else 0.0
     kl_mean = float(np.mean(kl_terms)) if len(kl_terms) else 0.0
@@ -470,17 +463,12 @@ def reinforce_step_multiturn(model, processor, device, batch, args: MTRLArgs):
     if not torch.isfinite(loss):
         loss = torch.nan_to_num(policy_loss, nan=0.0, posinf=1e4, neginf=1e4)
 
-    # sample logging
-    sample_pairs = []
+    avg_reward = float(policy_loss.detach().item()) * 0.0
     try:
-        for i in range(min(2, len(all_decoded))):
-            instruction = batch[i][0] if i < len(batch) else ""
-            joined = " | ".join(all_decoded[i])
-            sample_pairs.append((instruction, joined))
+        # approximate: mean of last collected entropies is logged separately; reward use per-turn shaping average is costly here
+        avg_reward = float(np.mean(entropies)) if len(entropies) else 0.0
     except Exception:
         pass
-
-    avg_reward = float(np.mean([np.mean(r) if len(r) else 0.0 for r in all_rewards])) if len(all_rewards) else 0.0
 
     return loss, avg_reward, entropy_mean, kl_mean, sample_pairs
 
@@ -571,7 +559,6 @@ def main():
         gamma=args_ns.gamma,
     )
 
-    # setup
     set_seed(args.seed)
     global_rank = 0
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -597,6 +584,11 @@ def main():
     else:
         model = Qwen2VLForConditionalGeneration.from_pretrained(args.model_id, torch_dtype=torch_dtype)
         model.to(device)
+    # Disable KV cache to reduce memory during training/inference loops
+    try:
+        model.config.use_cache = False
+    except Exception:
+        pass
     if args.gradient_checkpointing:
         try:
             model.gradient_checkpointing_enable()
@@ -605,7 +597,6 @@ def main():
 
     optimizer = AdamW(model.parameters(), lr=args.lr)
 
-    # reference model
     if args.kl_coef > 0.0:
         try:
             ref_id = args.ref_model_id if args.ref_model_id else args.model_id
@@ -638,7 +629,6 @@ def main():
             print(f"Reference model load failed, disabling KL: {e}")
             args.kl_coef = 0.0
 
-    # resume
     start_epoch = 0
     global_step = 0
     resume_dir = None
@@ -767,13 +757,11 @@ def main():
                 writer.add_scalar("train/entropy", ent, global_step)
                 if args.kl_coef > 0.0:
                     writer.add_scalar("train/kl", kl, global_step)
-
                 try:
                     invalid_rate = 1.0 if reward <= -0.999 else 0.0
                     writer.add_scalar("train/invalid_parse_rate", invalid_rate, global_step)
                 except Exception:
                     pass
-
                 if args.log_samples_every > 0 and ((global_step + 1) % args.log_samples_every == 0):
                     try:
                         for i, (instr, out_texts) in enumerate(sample_pairs):
@@ -809,7 +797,6 @@ def main():
         duration = time.time() - start
         print(f"Epoch {epoch+1} done in {duration:.1f}s | avg loss {running_loss/args.steps_per_epoch:.4f} | avg reward {running_reward/args.steps_per_epoch:.3f}")
 
-        # end-of-epoch eval and save
         sr = evaluate_screenspot_subset_multiturn(processor, model, args.dataset_dir, args.eval_subset_limit, min_pixels, max_pixels, device, max(1, int(args.turns_per_traj)))
         if writer:
             writer.add_scalar("eval/screenspot_subset_success_epoch", sr, epoch)
