@@ -6,27 +6,17 @@ Memory-optimized Multi-Turn RL (MTRL) trainer for ShowUI-2B (Qwen2VL) with PPO-C
 
 Key memory tactics:
 - Rollout buffers store tensors on CPU (move to CUDA only when computing).
-- Generation with use_cache=False (smaller KV cache).
-- Lower default visual token budgets; shorter outputs.
-- Optional QLoRA (4-bit) + LoRA adapters to fine-tune with minimal VRAM.
+- Generation with use_cache toggled (default off) to reduce KV cache.
+- Smaller default image token budgets + short outputs.
+- Optional QLoRA (4-bit) + LoRA adapters (train only small adapter weights).
 - Gradient checkpointing supported.
 
-Requires:
-  pip install "transformers>=4.45,<4.47" bitsandbytes peft tensorboard pillow tqdm
-
-Run (VRAM-friendly QLoRA+LoRA; start small):
-  python train_mtrl_memopt.py \
-    --dataset_dir "$DATA_DIR" \
-    --train_dataset showui-desktop \
-    --train_json hf_train \
-    --epochs 1 --steps_per_epoch 20 \
-    --batch_size_episodes 2 --minibatches 2 \
-    --horizon 3 \
-    --load_in_4bit --use_lora \
-    --lora_r 16 --lora_alpha 32 --lora_dropout 0.05 \
-    --min_visual_tokens 160 --max_visual_tokens 640 \
-    --max_new_tokens 16 --gradient_checkpointing \
-    --log_dir ./runs/mtrl_memopt
+Fixes:
+- Manual construction of Qwen2-VL processor (tokenizer + image processor) with
+  size={'shortest_edge': ..., 'longest_edge': ...} to satisfy new transformers versions.
+- Gated sampling flags (only when do_sample=True).
+- dtype/device alignment for value head.
+- StepBuf uses CPU storage and 1-D shapes where needed.
 """
 
 import os, re, ast, math, time, json, random, gc
@@ -41,13 +31,19 @@ from torch.optim import AdamW
 from PIL import Image
 from tqdm import tqdm
 
-from transformers import AutoProcessor, Qwen2VLForConditionalGeneration, BitsAndBytesConfig
+from transformers import (
+    AutoTokenizer,
+    Qwen2VLImageProcessor,
+    Qwen2VLProcessor,
+    Qwen2VLForConditionalGeneration,
+    BitsAndBytesConfig,
+)
 from torch.utils.tensorboard import SummaryWriter
 
-# Project utils (must exist)
+# Project utils (must exist in your repo)
 from data.dset_shared_grounding import dataset_mapping
-from data.template.shared_grounding import grounding_to_qwen
-from data.data_utils import IGNORE_INDEX
+from data.template.shared_grounding import grounding_to_qwen  # not used directly here but kept for parity
+from data.data_utils import IGNORE_INDEX  # noqa: F401 (kept for parity)
 
 # Optional PEFT (for LoRA/QLoRA)
 try:
@@ -103,7 +99,7 @@ class Args:
     top_k: int = 0
     num_beams: int = 1
     warmup_steps: int = 100
-    gen_use_cache: bool = False      # <<< smaller memory
+    gen_use_cache: bool = False      # smaller memory by default
 
     # Visual token budgets (smaller)
     min_visual_tokens: int = 160
@@ -117,7 +113,7 @@ class Args:
     kl_coef: float = 0.0
     gae_gamma: float = 0.99
     gae_lambda: float = 0.95
-    batch_size_episodes: int = 2     # <<< small by default
+    batch_size_episodes: int = 2
     minibatches: int = 2
 
     # Training schedule
@@ -128,7 +124,7 @@ class Args:
     # Logging / saving
     log_dir: str = "./runs/mtrl_memopt"
     log_samples_every: int = 50
-    eval_every: int = 0               # turn off frequent eval by default
+    eval_every: int = 0               # off by default to save mem
     eval_subset_limit: int = 200
     save_every_epochs: int = 1
     save_best: bool = False
@@ -137,18 +133,16 @@ class Args:
     resume_from: str = ""
     save_optimizer: bool = True
 
-    # Processor
-    use_fast_processor: bool = False  # silence "slow processor" warning
+    # Processor / tokenizer speed
+    use_fast_processor: bool = False  # False keeps slow tokenizer (avoids behavior drift)
 
 
 # -----------------------------
 # Utils
 # -----------------------------
 def set_seed(seed: int):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    random.seed(seed); np.random.seed(seed)
+    torch.manual_seed(seed); torch.cuda.manual_seed_all(seed)
 
 
 def parse_coord(output_text: str) -> Tuple[float, float]:
@@ -250,7 +244,7 @@ class StepBuf:
         "input_ids_full", "attention_mask_full",  # torch.Long on CPU
         "pixel_values_cpu",                       # torch.Float on CPU or None
         "prompt_len",                             # int
-        "image_grid_thw",                         # kept as-is (small)
+        "image_grid_thw",                         # metadata (small)
         "action_ids",                             # torch.Long on CPU
         "old_logp", "value", "reward", "done", "entropy"  # 1D tensors on CPU
     )
@@ -260,7 +254,7 @@ class StepBuf:
 
 
 # -----------------------------
-# Evaluation (no grads, cache off)
+# Evaluation (no grads)
 # -----------------------------
 @torch.no_grad()
 def evaluate_subset(processor, model, dataset_dir: str, limit: int, device: str, min_pixels: int, max_pixels: int) -> float:
@@ -385,7 +379,7 @@ def main():
     p.add_argument("--resume_from", type=str, default="")
     p.add_argument("--save_optimizer", action="store_true")
 
-    # Processor
+    # Processor / tokenizer speed
     p.add_argument("--use_fast_processor", action="store_true")
 
     args = Args(**vars(p.parse_args()))
@@ -402,14 +396,28 @@ def main():
     except Exception:
         pass
 
+    # --- Build processor manually (fix for newer transformers) ---
+    # Map token budgets (tokens ~ (edge/28)^2) to edges; clamp to >=224 px
+    def _edge_from_tokens(n_tokens: int) -> int:
+        e = 28 * math.ceil(math.sqrt(max(1, n_tokens)))
+        return max(224, int(e))
+
+    shortest_edge = _edge_from_tokens(args.min_visual_tokens)
+    longest_edge  = _edge_from_tokens(args.max_visual_tokens)
+
+    tok = AutoTokenizer.from_pretrained(args.model_id, use_fast=args.use_fast_processor)
+    # pad token guard (some Qwen configs don't set pad)
+    if tok.pad_token_id is None and tok.eos_token_id is not None:
+        tok.pad_token = tok.eos_token
+
+    img_proc = Qwen2VLImageProcessor(
+        size={"shortest_edge": shortest_edge, "longest_edge": longest_edge}
+    )
+    processor = Qwen2VLProcessor(image_processor=img_proc, tokenizer=tok)
+
+    # Also keep these numbers to pass in messages (used by Qwen2VL for tiling hints)
     min_pixels = args.min_visual_tokens * 28 * 28
     max_pixels = args.max_visual_tokens * 28 * 28
-    processor = AutoProcessor.from_pretrained(
-        args.model_id,
-        min_pixels=min_pixels,
-        max_pixels=max_pixels,
-        use_fast=args.use_fast_processor
-    )
 
     # --- Load base (with quant if requested) ---
     peft_used = False
@@ -430,8 +438,7 @@ def main():
                 r=args.lora_r, lora_alpha=args.lora_alpha, lora_dropout=args.lora_dropout,
                 bias="none", task_type="CAUSAL_LM", target_modules=target_modules
             )
-            base = get_peft_model(base, lconf)
-            peft_used = True
+            base = get_peft_model(base, lconf); peft_used = True
         hidden = base.config.hidden_size
     elif args.load_in_8bit:
         qconf = BitsAndBytesConfig(load_in_8bit=True)
@@ -445,8 +452,7 @@ def main():
                 r=args.lora_r, lora_alpha=args.lora_alpha, lora_dropout=args.lora_dropout,
                 bias="none", task_type="CAUSAL_LM", target_modules=target_modules
             )
-            base = get_peft_model(base, lconf)
-            peft_used = True
+            base = get_peft_model(base, lconf); peft_used = True
         hidden = base.config.hidden_size
     else:
         base = Qwen2VLForConditionalGeneration.from_pretrained(args.model_id, dtype=model_dtype)
@@ -457,8 +463,7 @@ def main():
                 r=args.lora_r, lora_alpha=args.lora_alpha, lora_dropout=args.lora_dropout,
                 bias="none", task_type="CAUSAL_LM", target_modules=target_modules
             )
-            base = get_peft_model(base, lconf)
-            peft_used = True
+            base = get_peft_model(base, lconf); peft_used = True
         hidden = base.config.hidden_size
 
     if args.gradient_checkpointing:
@@ -533,7 +538,7 @@ def main():
                     do_sample=do_sample,
                     num_beams=args.num_beams,
                     eos_token_id=processor.tokenizer.eos_token_id,
-                    use_cache=args.gen_use_cache,   # default False to save mem
+                    use_cache=args.gen_use_cache,
                 )
                 if do_sample:
                     gen_kwargs["temperature"] = max(1e-4, float(temperature_now))
@@ -589,7 +594,6 @@ def main():
                     hidden = out.hidden_states[-1]
                     alen = action_ids.size(1)
                     logits_gen = logits[0, prompt_len-1: prompt_len-1+alen, :]
-                    # action ids on device
                     action_ids_dev = action_ids[0].to(device)
                     log_probs = F.log_softmax(logits_gen, dim=-1)
                     probs = log_probs.exp()
@@ -612,7 +616,7 @@ def main():
                 ))
 
                 # Free CUDA asap
-                del out, logits, hidden, logits_gen, action_ids_dev
+                del out, logits, hidden, logits_gen, action_ids_dev, log_probs, probs, tok_logp
                 torch.cuda.empty_cache()
 
                 feedback = "Success. Stop." if success else dir_feedback(pred, center_rel)
@@ -621,27 +625,20 @@ def main():
                 if success:
                     break
 
-            # free PIL image
             img.close()
 
-        # encourage releasing cached blocks
-        torch.cuda.empty_cache()
-        gc.collect()
+        torch.cuda.empty_cache(); gc.collect()
         return bufs
 
     def ppo_update(bufs: List[StepBuf]):
         # Build flat tensors (CPU), GAE on CPU, then per-sample GPU forwards
-        rewards = torch.cat([b.reward for b in bufs], dim=0)     # CPU [N,1]
-        dones   = torch.cat([b.done   for b in bufs], dim=0)     # CPU [N,1]
-        values  = torch.cat([b.value  for b in bufs], dim=0).view(-1)  # CPU [N]
+        rewards = torch.cat([b.reward for b in bufs], dim=0).view(-1)     # CPU [N]
+        dones   = torch.cat([b.done   for b in bufs], dim=0).view(-1)     # CPU [N]
+        values  = torch.cat([b.value  for b in bufs], dim=0).view(-1)     # CPU [N]
         entropies = torch.cat([b.entropy for b in bufs], dim=0).view(-1)  # CPU [N]
 
-        rewards = rewards.view(-1)
-        dones = dones.view(-1)
-
         advantages = torch.zeros_like(rewards)
-        lastgaelam = 0.0
-        next_value = 0.0
+        lastgaelam = 0.0; next_value = 0.0
         for t in reversed(range(rewards.size(0))):
             mask = 1.0 - float(dones[t].item())
             delta = rewards[t].item() + args.gae_gamma * next_value * mask - values[t].item()
@@ -705,9 +702,7 @@ def main():
                     new_vals.append(v.squeeze(0))
                     new_ents.append(tok_ent)
 
-                    # Optional KL to ref model is omitted here for mem (args.kl_coef=0.0 default)
-
-                    # free per-sample tensors quickly
+                    # Free per-sample quickly
                     del out, logits, hidden, logits_gen, log_probs, probs, tok_logp, v
                     torch.cuda.empty_cache()
 
@@ -735,11 +730,9 @@ def main():
                 ent_losses.append(new_ents.mean().item())
                 kl_losses.append(float(kl_loss.item()))
 
-                # Free per-minibatch memory
                 del new_logps, new_vals, new_ents, kl_loss
                 torch.cuda.empty_cache()
 
-        # Back to CPU for logging
         return (
             float(np.mean(policy_losses)) if policy_losses else 0.0,
             float(np.mean(value_losses)) if value_losses else 0.0,
@@ -765,7 +758,6 @@ def main():
             if args.log_samples_every and (global_step % args.log_samples_every == 0):
                 writer.add_text("train/note", "Mem-optimized PPO step complete.", global_step)
 
-            # Optional eval (kept off by default to save mem/time)
             if args.eval_every and (global_step % args.eval_every == 0):
                 sr = evaluate_subset(processor, model, args.dataset_dir, args.eval_subset_limit, device, min_pixels, max_pixels)
                 writer.add_scalar("eval/screenspot_subset_success", sr, global_step)
@@ -773,36 +765,37 @@ def main():
 
             global_step += 1
 
-            # free CPU/GPU caches between PPO updates
             del bufs
             torch.cuda.empty_cache()
             gc.collect()
 
-        # End-of-epoch logs
         writer.add_scalar("epoch/policy_loss", float(np.mean(epoch_pl)), epoch)
         writer.add_scalar("epoch/value_loss", float(np.mean(epoch_vl)), epoch)
         writer.add_scalar("epoch/entropy", float(np.mean(epoch_ent)), epoch)
 
-        # Optional end-of-epoch eval
         if args.eval_every == 0:
             sr = evaluate_subset(processor, model, args.dataset_dir, args.eval_subset_limit, device, min_pixels, max_pixels)
             print(f"[MTRL-MEM] Epoch {epoch+1} subset SR: {sr:.4f}")
             writer.add_scalar("eval/screenspot_subset_success_epoch", sr, epoch)
 
-        # Save
         if (epoch + 1) % args.save_every_epochs == 0:
             save_dir = os.path.join(os.getcwd(), f"mtrl_mem_ckpt_epoch{epoch+1}")
             os.makedirs(save_dir, exist_ok=True)
-            # If PEFT, save adapters; else full base weights
             try:
                 if peft_used:
+                    # Save adapters (and base config)
                     model.base.save_pretrained(save_dir)
                 else:
                     torch.save(model.base.state_dict(), os.path.join(save_dir, "pytorch_model.bin"))
                     model.base.config.to_json_file(os.path.join(save_dir, "config.json"))
             except Exception as e:
                 print(f"[save] {e}")
-            processor.save_pretrained(save_dir)
+            # Save processor components
+            try:
+                processor.save_pretrained(save_dir)
+            except Exception:
+                tok.save_pretrained(save_dir)
+                img_proc.save_pretrained(save_dir)
             if args.save_optimizer:
                 try:
                     torch.save(optimizer.state_dict(), os.path.join(save_dir, "optimizer.pt"))
@@ -811,9 +804,7 @@ def main():
                 except Exception as e:
                     print(f"[save_opt] {e}")
 
-        # GC at epoch boundary
-        torch.cuda.empty_cache()
-        gc.collect()
+        torch.cuda.empty_cache(); gc.collect()
 
     print("Done.")
 
