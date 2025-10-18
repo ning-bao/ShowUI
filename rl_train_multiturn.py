@@ -499,7 +499,9 @@ def main():
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--lr", type=float, default=5e-6)
     parser.add_argument("--tau_success", type=float, default=0.06)
+    parser.add_argument("--tau_success_end", type=float, default=0.06)
     parser.add_argument("--alpha_dist", type=float, default=1.0)
+    parser.add_argument("--alpha_dist_end", type=float, default=1.0)
     parser.add_argument("--max_new_tokens", type=int, default=32)
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--temperature_end", type=float, default=0.7)
@@ -542,7 +544,9 @@ def main():
         batch_size=args_ns.batch_size,
         lr=args_ns.lr,
         tau_success=args_ns.tau_success,
+        tau_success_end=args_ns.tau_success_end,
         alpha_dist=args_ns.alpha_dist,
+        alpha_dist_end=args_ns.alpha_dist_end,
         max_new_tokens=args_ns.max_new_tokens,
         temperature=args_ns.temperature,
         temperature_end=args_ns.temperature_end,
