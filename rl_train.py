@@ -1,4 +1,6 @@
 import os
+import io
+import hashlib
 import ast
 import math
 import time
@@ -221,6 +223,13 @@ def load_split_items(dataset_dir: str, dataset: str, split: str) -> Tuple[str, L
         def coerce_list(val):
             if isinstance(val, (list, tuple)):
                 return list(val)
+            # numpy array support
+            try:
+                import numpy as _np  # local alias to avoid shadowing
+                if isinstance(val, _np.ndarray):
+                    return val.tolist()
+            except Exception:
+                pass
             return None
 
         for pfile in parq_files:
@@ -256,12 +265,13 @@ def load_split_items(dataset_dir: str, dataset: str, split: str) -> Tuple[str, L
                 img_val = get_val(row, [
                     "image_path", "img_path", "image", "img", "screenshot_path", "image_file", "image_url"
                 ])
+                img_bytes = None
                 if isinstance(img_val, dict):
                     # HF Datasets image struct {"path": str, "bytes": optional}
                     if "path" in img_val and img_val["path"]:
                         img_val = img_val["path"]
                     elif "bytes" in img_val and img_val["bytes"]:
-                        # No path to resolve; skip rows with only bytes
+                        img_bytes = img_val["bytes"]
                         img_val = ""
                 if isinstance(img_val, (bytes, bytearray)):
                     try:
@@ -271,15 +281,34 @@ def load_split_items(dataset_dir: str, dataset: str, split: str) -> Tuple[str, L
                 if not isinstance(img_val, str):
                     img_val = str(img_val) if img_val is not None else ""
                 abs_img = resolve_image_path(img_val, pfile)
+                iw = ih = None
+                if not abs_img and img_bytes:
+                    try:
+                        # Create cache path under dataset_dir
+                        cache_dir = os.path.join(dataset_dir, ".sf_parquet_img_cache")
+                        os.makedirs(cache_dir, exist_ok=True)
+                        sha = hashlib.sha1(img_bytes).hexdigest()
+                        abs_img = os.path.join(cache_dir, f"{sha}.png")
+                        if not os.path.exists(abs_img):
+                            with Image.open(io.BytesIO(img_bytes)) as im:
+                                iw, ih = im.size
+                                im.convert("RGB").save(abs_img, format="PNG")
+                        if iw is None or ih is None:
+                            with Image.open(abs_img) as im2:
+                                iw, ih = im2.size
+                    except Exception:
+                        abs_img = ""
+                        iw = ih = None
                 if not abs_img:
                     continue
 
-                # Determine image size
-                try:
-                    with Image.open(abs_img) as im:
-                        iw, ih = im.size
-                except Exception:
-                    continue
+                # Determine image size if still unknown
+                if iw is None or ih is None:
+                    try:
+                        with Image.open(abs_img) as im:
+                            iw, ih = im.size
+                    except Exception:
+                        continue
 
                 # Instruction candidates
                 instr = get_val(row, ["task", "instruction", "query", "goal", "caption", "description", "text"])
@@ -306,11 +335,28 @@ def load_split_items(dataset_dir: str, dataset: str, split: str) -> Tuple[str, L
                         blist = None
                 if blist is not None and len(blist) >= 4:
                     try:
-                        bx, by, bw, bh = float(blist[0]), float(blist[1]), float(blist[2]), float(blist[3])
-                        cx = bx + bw / 2.0
-                        cy = by + bh / 2.0
-                        cx_norm = cx / max(1.0, float(iw))
-                        cy_norm = cy / max(1.0, float(ih))
+                        b0, b1, b2, b3 = float(blist[0]), float(blist[1]), float(blist[2]), float(blist[3])
+                        # Detect format: [x1,y1,x2,y2] vs [x,y,w,h]
+                        if (b2 > b0 and b3 > b1):
+                            # likely corners
+                            if max(abs(b0), abs(b1), abs(b2), abs(b3)) > 1.0001:
+                                # pixels
+                                cx = (b0 + b2) / 2.0
+                                cy = (b1 + b3) / 2.0
+                                cx_norm = cx / max(1.0, float(iw))
+                                cy_norm = cy / max(1.0, float(ih))
+                            else:
+                                # normalized corners
+                                cx_norm = (b0 + b2) / 2.0
+                                cy_norm = (b1 + b3) / 2.0
+                        else:
+                            # treat as [x, y, w, h]
+                            if max(abs(b0), abs(b1), abs(b2), abs(b3)) > 1.0001:
+                                cx_norm = (b0 + b2 / 2.0) / max(1.0, float(iw))
+                                cy_norm = (b1 + b3 / 2.0) / max(1.0, float(ih))
+                            else:
+                                cx_norm = b0 + b2 / 2.0
+                                cy_norm = b1 + b3 / 2.0
                     except Exception:
                         cx_norm = None
                         cy_norm = None
