@@ -306,22 +306,33 @@ def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
     if len(raw) > 0:
         print(f"DEBUG: MiniWob++ schema keys: {list(raw[0].keys())}")
         if "processed_states" in raw[0]:
-            ps = raw[0]["processed_states"]
-            print(f"DEBUG: processed_states type: {type(ps)}, length: {len(ps) if isinstance(ps, (list, tuple)) else 'N/A'}")
-            if isinstance(ps, list) and len(ps) > 0:
-                print(f"DEBUG: processed_states[0] type: {type(ps[0])}")
-                if isinstance(ps[0], dict):
-                    print(f"DEBUG: processed_states[0] keys: {list(ps[0].keys())}")
-                    # Print sample values for key fields
-                    for k in ["action", "state", "tree", "action_type", "coords", "x", "y"]:
-                        if k in ps[0]:
-                            v = ps[0][k]
-                            if isinstance(v, dict):
-                                print(f"DEBUG:   {k}: dict with keys {list(v.keys())}")
-                            else:
-                                print(f"DEBUG:   {k}: {type(v).__name__} = {str(v)[:100]}")
-                else:
-                    print(f"DEBUG: processed_states[0] = {str(ps[0])[:200]}")
+            ps_raw = raw[0]["processed_states"]
+            print(f"DEBUG: processed_states type: {type(ps_raw)}")
+            if isinstance(ps_raw, str):
+                print(f"DEBUG: processed_states is JSON string, first 200 chars: {ps_raw[:200]}")
+                try:
+                    ps = json.loads(ps_raw)
+                    print(f"DEBUG: After JSON parse - type: {type(ps)}, length: {len(ps) if isinstance(ps, (list, tuple)) else 'N/A'}")
+                    if isinstance(ps, list) and len(ps) > 0:
+                        print(f"DEBUG: processed_states[0] type: {type(ps[0])}")
+                        if isinstance(ps[0], dict):
+                            print(f"DEBUG: processed_states[0] keys: {list(ps[0].keys())}")
+                            # Print sample values for key fields
+                            for k in ["action", "state", "tree", "action_type", "coords", "x", "y"]:
+                                if k in ps[0]:
+                                    v = ps[0][k]
+                                    if isinstance(v, dict):
+                                        print(f"DEBUG:   {k}: dict with keys {list(v.keys())}")
+                                    else:
+                                        print(f"DEBUG:   {k}: {type(v).__name__} = {str(v)[:100]}")
+                        else:
+                            print(f"DEBUG: processed_states[0] = {str(ps[0])[:200]}")
+                except Exception as e:
+                    print(f"DEBUG: Failed to parse JSON: {e}")
+            elif isinstance(ps_raw, (list, tuple)):
+                print(f"DEBUG: processed_states is list, length: {len(ps_raw)}")
+                if len(ps_raw) > 0:
+                    print(f"DEBUG: processed_states[0] keys: {list(ps_raw[0].keys()) if isinstance(ps_raw[0], dict) else 'not dict'}")
     
     # Images: render on-the-fly or skip; for now placeholder
     img_dir = os.path.join(base_dir, "screenshots")
@@ -335,9 +346,23 @@ def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
     
     for idx, item in enumerate(raw):
         # MiniWob++ actual schema: "task_name", "utterance", "reward", "raw_reward", "processed_states"
-        # processed_states is a list of state dicts, each potentially containing action info
+        # processed_states is a JSON string that needs parsing
         task_name = item.get("task_name", "") or item.get("subdomain", "") or item.get("task", "")
-        processed_states = item.get("processed_states", [])
+        processed_states_raw = item.get("processed_states", [])
+        
+        # Parse processed_states if it's a JSON string
+        processed_states = []
+        if isinstance(processed_states_raw, str):
+            try:
+                processed_states = json.loads(processed_states_raw)
+            except Exception as e:
+                if idx == 0:
+                    print(f"DEBUG: Failed to parse processed_states JSON: {e}")
+                    print(f"DEBUG: First 200 chars: {processed_states_raw[:200]}")
+                skipped_no_processed += 1
+                continue
+        elif isinstance(processed_states_raw, list):
+            processed_states = processed_states_raw
         
         # New schema: processed_states contains trajectory steps with embedded action/state info
         # Old schema fallback: separate states and actions
