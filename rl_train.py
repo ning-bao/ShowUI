@@ -177,7 +177,10 @@ def build_prompt(processor, element_name: str, image_path: str, min_pixels: int,
     # Strong instruction to return only [x, y]
     if isinstance(messages, list) and len(messages) > 0 and isinstance(messages[0], dict):
         try:
-            messages[0]["content"].append({"type":"text","text":"Output only [x, y] where both are between 0 and 1."})
+            messages[0]["content"].append({
+                "type":"text",
+                "text":"Return exactly two numbers in square brackets like [x, y] with both x and y in [0,1]. Do not include any other text, units, or explanation."
+            })
         except Exception:
             pass
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
@@ -196,6 +199,10 @@ def parse_coord(output_text: str, img_size: Tuple[int, int] = None) -> Tuple[flo
     Returns (nan, nan) if parsing fails.
     """
     text = (output_text or "").strip()
+    # If there are multiple bracketed sections, pick the first [ ... ] segment
+    bracket = re.search(r"\[[^\]]+\]", text)
+    if bracket:
+        text = bracket.group(0)
     # First, try safe literal eval for simple list/tuple cases
     try:
         xy = ast.literal_eval(text)
@@ -854,6 +861,19 @@ def main():
                 try:
                     for i, (elem_name, out_text) in enumerate(sample_pairs):
                         writer.add_text(f"train/sample_{i}", f"Instruction: {elem_name}\nOutput: {out_text}", global_step)
+                except Exception:
+                    pass
+
+            # lightweight debug: print first step raw and parsed output for the first sample
+            if global_step < 3 and len(decoded) > 0:
+                try:
+                    dbg_img_w = None
+                    dbg_img_h = None
+                    if len(meta_list) > 0:
+                        with Image.open(meta_list[0][1]) as _dbg:
+                            dbg_img_w, dbg_img_h = _dbg.size
+                    dbg_parsed = parse_coord(decoded[0], img_size=(dbg_img_w, dbg_img_h) if (dbg_img_w and dbg_img_h) else None)
+                    print(f"[DBG] raw='{decoded[0]}' parsed={dbg_parsed}")
                 except Exception:
                     pass
 
