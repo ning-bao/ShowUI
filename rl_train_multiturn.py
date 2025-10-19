@@ -307,8 +307,21 @@ def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
         print(f"DEBUG: MiniWob++ schema keys: {list(raw[0].keys())}")
         if "processed_states" in raw[0]:
             ps = raw[0]["processed_states"]
+            print(f"DEBUG: processed_states type: {type(ps)}, length: {len(ps) if isinstance(ps, (list, tuple)) else 'N/A'}")
             if isinstance(ps, list) and len(ps) > 0:
-                print(f"DEBUG: processed_states has {len(ps)} items, first keys: {list(ps[0].keys())}")
+                print(f"DEBUG: processed_states[0] type: {type(ps[0])}")
+                if isinstance(ps[0], dict):
+                    print(f"DEBUG: processed_states[0] keys: {list(ps[0].keys())}")
+                    # Print sample values for key fields
+                    for k in ["action", "state", "tree", "action_type", "coords", "x", "y"]:
+                        if k in ps[0]:
+                            v = ps[0][k]
+                            if isinstance(v, dict):
+                                print(f"DEBUG:   {k}: dict with keys {list(v.keys())}")
+                            else:
+                                print(f"DEBUG:   {k}: {type(v).__name__} = {str(v)[:100]}")
+                else:
+                    print(f"DEBUG: processed_states[0] = {str(ps[0])[:200]}")
     
     # Images: render on-the-fly or skip; for now placeholder
     img_dir = os.path.join(base_dir, "screenshots")
@@ -316,7 +329,11 @@ def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
         img_dir = os.path.join(base_dir, "images")
 
     samples: List[dict] = []
-    for item in raw:
+    skipped_no_processed = 0
+    skipped_no_steps = 0
+    skipped_no_coords = 0
+    
+    for idx, item in enumerate(raw):
         # MiniWob++ actual schema: "task_name", "utterance", "reward", "raw_reward", "processed_states"
         # processed_states is a list of state dicts, each potentially containing action info
         task_name = item.get("task_name", "") or item.get("subdomain", "") or item.get("task", "")
@@ -332,6 +349,9 @@ def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
             states_old = item.get("states", [])
             actions_old = item.get("actions", [])
             if not actions_old or not states_old:
+                skipped_no_processed += 1
+                if idx == 0:
+                    print(f"DEBUG: First item skipped - processed_states empty/missing")
                 continue
             # Merge into processed_states-like structure
             use_states = []
@@ -340,6 +360,7 @@ def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
                 use_states.append(combined)
         
         if not use_states:
+            skipped_no_processed += 1
             continue
         
         # Build per-step instructions and targets
@@ -415,23 +436,34 @@ def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
                     pass
             
             if coords is None:
+                skipped_no_coords += 1
+                if idx == 0 and i == 0:
+                    print(f"DEBUG: First item, first step - no coords found")
+                    print(f"DEBUG:   step_dict keys: {list(step_dict.keys())}")
+                    print(f"DEBUG:   act keys: {list(act.keys()) if isinstance(act, dict) else 'not dict'}")
                 continue
             
             try:
                 px = min(1.0, max(0.0, float(coords[0]) / img_w))
                 py = min(1.0, max(0.0, float(coords[1]) / img_h))
                 pt = [px, py]
-            except Exception:
+            except Exception as e:
+                if idx == 0 and i == 0:
+                    print(f"DEBUG: First item, first step - coord normalization failed: {e}")
                 continue
             
             s_img = f"step_{i}.png"
             norm_steps.append({"instruction": instr, "point": pt, "img_url": s_img})
         
         if len(norm_steps) == 0:
+            skipped_no_steps += 1
+            if idx == 0:
+                print(f"DEBUG: First item generated 0 norm_steps from {len(use_states)} use_states")
             continue
         samples.append({"base_img_url": None, "steps": norm_steps})
 
     print(f"MiniWob++ loaded {len(samples)} multi-turn items from {len(shard_files)} shards")
+    print(f"DEBUG: Skipped {skipped_no_processed} (no processed_states), {skipped_no_steps} (no valid steps), {skipped_no_coords} step coords missing")
     return img_dir, samples
 
 
