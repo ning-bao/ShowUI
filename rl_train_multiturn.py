@@ -71,6 +71,11 @@ class MTRLArgs:
     log_dir: str = "./runs/rl-mt"
     eval_subset_limit: int = 1000
     eval_every_steps: int = 200
+    eval_subset_limit_train: int = 200
+    eval_subset_limit_epoch: int = 1000
+    full_eval_every_epochs: int = 5
+    eval_max_new_tokens: int = 24
+    eval_disable_mid: bool = False
     log_samples_every: int = 100
     log_hist_every: int = 100
     save_every_epochs: int = 10
@@ -189,7 +194,7 @@ def compute_turn_reward(pred_xy: Tuple[float, float], tgt_xy: Tuple[float, float
 
 
 @torch.no_grad()
-def evaluate_screenspot_subset_multiturn(processor, model, dataset_dir: str, limit: int, min_pixels: int, max_pixels: int, device: str, turns: int) -> float:
+def evaluate_screenspot_subset_multiturn(processor, model, dataset_dir: str, limit: int, min_pixels: int, max_pixels: int, device: str, turns: int, eval_max_new_tokens: int) -> float:
     meta_path = os.path.join(dataset_dir, "ScreenSpot", "metadata", "hf_test_full.json")
     if not os.path.exists(meta_path):
         return 0.0
@@ -228,7 +233,7 @@ def evaluate_screenspot_subset_multiturn(processor, model, dataset_dir: str, lim
             try:
                 out = model_unwrapped.generate(
                     **inputs,
-                    max_new_tokens=64,
+                    max_new_tokens=int(max(8, eval_max_new_tokens)),
                     do_sample=False,
                     num_beams=1,
                     eos_token_id=processor.tokenizer.eos_token_id,
@@ -523,6 +528,11 @@ def main():
     parser.add_argument("--log_dir", type=str, default="./runs/rl-mt")
     parser.add_argument("--eval_subset_limit", type=int, default=1000)
     parser.add_argument("--eval_every_steps", type=int, default=200)
+    parser.add_argument("--eval_subset_limit_train", type=int, default=200)
+    parser.add_argument("--eval_subset_limit_epoch", type=int, default=1000)
+    parser.add_argument("--full_eval_every_epochs", type=int, default=5)
+    parser.add_argument("--eval_max_new_tokens", type=int, default=24)
+    parser.add_argument("--eval_disable_mid", action="store_true")
     parser.add_argument("--save_every_epochs", type=int, default=10)
     parser.add_argument("--resume_from", type=str, default="")
     parser.add_argument("--save_optimizer", action="store_true")
@@ -568,6 +578,11 @@ def main():
         log_dir=args_ns.log_dir,
         eval_subset_limit=args_ns.eval_subset_limit,
         eval_every_steps=args_ns.eval_every_steps,
+        eval_subset_limit_train=args_ns.eval_subset_limit_train,
+        eval_subset_limit_epoch=args_ns.eval_subset_limit_epoch,
+        full_eval_every_epochs=args_ns.full_eval_every_epochs,
+        eval_max_new_tokens=args_ns.eval_max_new_tokens,
+        eval_disable_mid=args_ns.eval_disable_mid,
         save_every_epochs=args_ns.save_every_epochs,
         resume_from=args_ns.resume_from,
         save_optimizer=args_ns.save_optimizer,
@@ -827,8 +842,14 @@ def main():
                     except Exception:
                         pass
 
-            if ((global_step + 1) % args.eval_every_steps == 0):
-                sr = evaluate_screenspot_subset_multiturn(processor, model, args.dataset_dir, args.eval_subset_limit, min_pixels, max_pixels, device, max(1, int(args.turns_per_traj)))
+            if ((global_step + 1) % args.eval_every_steps == 0) and (not args.eval_disable_mid):
+                sr = evaluate_screenspot_subset_multiturn(
+                    processor, model, args.dataset_dir,
+                    args.eval_subset_limit_train,
+                    min_pixels, max_pixels, device,
+                    max(1, int(args.turns_per_traj)),
+                    int(max(8, args.eval_max_new_tokens))
+                )
                 if writer:
                     writer.add_scalar("eval/screenspot_subset_success", sr, global_step)
                 if sr > best_sr:
@@ -855,7 +876,14 @@ def main():
         duration = time.time() - start
         print(f"Epoch {epoch+1} done in {duration:.1f}s | avg loss {running_loss/args.steps_per_epoch:.4f} | avg reward {running_reward/args.steps_per_epoch:.3f}")
 
-        sr = evaluate_screenspot_subset_multiturn(processor, model, args.dataset_dir, args.eval_subset_limit, min_pixels, max_pixels, device, max(1, int(args.turns_per_traj)))
+        end_limit = args.eval_subset_limit_epoch if ((epoch + 1) % max(1, args.full_eval_every_epochs) == 0) else args.eval_subset_limit_train
+        sr = evaluate_screenspot_subset_multiturn(
+            processor, model, args.dataset_dir,
+            end_limit,
+            min_pixels, max_pixels, device,
+            max(1, int(args.turns_per_traj)),
+            int(max(8, args.eval_max_new_tokens))
+        )
         if writer:
             writer.add_scalar("eval/screenspot_subset_success_epoch", sr, epoch)
         print(f"Epoch {epoch+1} eval subset success (multi-turn): {sr:.4f}")
