@@ -292,49 +292,11 @@ def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
     if not os.path.isdir(data_dir):
         raise FileNotFoundError(f"MiniWob++ data folder not found: {data_dir}. Download with: huggingface-cli download LucasThil/miniwob_plusplus_v2_raw --repo-type dataset --local-dir {base_dir}")
     
-    # Read all train-*.parquet files
+    # Read all train-*.parquet files (streaming, projected columns)
     shard_files = sorted(glob.glob(os.path.join(data_dir, "train-*.parquet")))
     if not shard_files:
         raise FileNotFoundError(f"No parquet shards in {data_dir}")
-    
-    raw = []
-    for fp in shard_files:
-        table = pq.read_table(fp)
-        raw.extend(table.to_pylist())
-    
-    # Debug: print schema from first item
-    if len(raw) > 0:
-        print(f"DEBUG: MiniWob++ schema keys: {list(raw[0].keys())}")
-        if "processed_states" in raw[0]:
-            ps_raw = raw[0]["processed_states"]
-            print(f"DEBUG: processed_states type: {type(ps_raw)}")
-            if isinstance(ps_raw, str):
-                print(f"DEBUG: processed_states is string, first 200 chars: {ps_raw[:200]}")
-                try:
-                    json_str = ps_raw.replace("'", '"').replace('True', 'true').replace('False', 'false').replace('None', 'null')
-                    ps = json.loads(json_str)
-                    print(f"DEBUG: After JSON parse - type: {type(ps)}, length: {len(ps) if isinstance(ps, (list, tuple)) else 'N/A'}")
-                    if isinstance(ps, list) and len(ps) > 0:
-                        print(f"DEBUG: processed_states[0] type: {type(ps[0])}")
-                        if isinstance(ps[0], dict):
-                            print(f"DEBUG: processed_states[0] keys: {list(ps[0].keys())}")
-                            # Print sample values for key fields
-                            for k in ["action", "state", "tree", "dom", "action_type", "coords", "x", "y", "time"]:
-                                if k in ps[0]:
-                                    v = ps[0][k]
-                                    if isinstance(v, dict):
-                                        print(f"DEBUG:   {k}: dict with keys {list(v.keys())}")
-                                    else:
-                                        print(f"DEBUG:   {k}: {type(v).__name__} = {str(v)[:100]}")
-                        else:
-                            print(f"DEBUG: processed_states[0] = {str(ps[0])[:200]}")
-                except Exception as e:
-                    print(f"DEBUG: Failed to parse: {e}")
-            elif isinstance(ps_raw, (list, tuple)):
-                print(f"DEBUG: processed_states is list, length: {len(ps_raw)}")
-                if len(ps_raw) > 0:
-                    print(f"DEBUG: processed_states[0] keys: {list(ps_raw[0].keys()) if isinstance(ps_raw[0], dict) else 'not dict'}")
-    
+
     # Images: render on-the-fly or skip; for now placeholder
     img_dir = os.path.join(base_dir, "screenshots")
     if not os.path.isdir(img_dir):
@@ -344,8 +306,36 @@ def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
     skipped_no_processed = 0
     skipped_no_steps = 0
     skipped_no_coords = 0
-    
-    for idx, item in enumerate(raw):
+    max_samples = 2000  # cap to keep loading fast
+    debug_printed = False
+
+    for fp in shard_files:
+        try:
+            pf = pq.ParquetFile(fp)
+        except Exception:
+            continue
+        for batch in pf.iter_batches(batch_size=64, columns=["task_name", "utterance", "reward", "raw_reward", "processed_states"]):
+            rows = batch.to_pylist()
+            for idx, item in enumerate(rows):
+                if not debug_printed:
+                    try:
+                        print(f"DEBUG: MiniWob++ schema keys: {list(item.keys())}")
+                        ps_raw = item.get("processed_states")
+                        print(f"DEBUG: processed_states type: {type(ps_raw)}")
+                        if isinstance(ps_raw, str):
+                            print(f"DEBUG: processed_states is string, first 200 chars: {ps_raw[:200]}")
+                            try:
+                                json_str = ps_raw.replace("'", '"').replace('True', 'true').replace('False', 'false').replace('None', 'null')
+                                ps = json.loads(json_str)
+                                print(f"DEBUG: After JSON parse - type: {type(ps)}, length: {len(ps) if isinstance(ps, (list, tuple)) else 'N/A'}")
+                                if isinstance(ps, list) and len(ps) > 0 and isinstance(ps[0], dict):
+                                    print(f"DEBUG: processed_states[0] keys: {list(ps[0].keys())}")
+                            except Exception as e:
+                                print(f"DEBUG: Failed to parse processed_states: {e}")
+                        debug_printed = True
+                    except Exception:
+                        debug_printed = True
+                
         # MiniWob++ actual schema: "task_name", "utterance", "reward", "raw_reward", "processed_states"
         # processed_states is a JSON string that needs parsing
         task_name = item.get("task_name", "") or item.get("subdomain", "") or item.get("task", "")
@@ -364,10 +354,15 @@ def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
                 try:
                     processed_states = ast.literal_eval(processed_states_raw)
                 except Exception as e:
-                    if idx == 0:
+                    # only print once
+                    if not debug_printed:
                         print(f"DEBUG: Failed to parse processed_states: {e}")
+                        debug_printed = True
                     skipped_no_processed += 1
-                    continue
+                    if len(samples) >= max_samples:
+                        break
+                    else:
+                        continue
         elif isinstance(processed_states_raw, list):
             processed_states = processed_states_raw
         
@@ -382,8 +377,6 @@ def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
             actions_old = item.get("actions", [])
             if not actions_old or not states_old:
                 skipped_no_processed += 1
-                if idx == 0:
-                    print(f"DEBUG: First item skipped - processed_states empty/missing")
                 continue
             # Merge into processed_states-like structure
             use_states = []
@@ -398,42 +391,19 @@ def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
         # Build per-step instructions and targets
         norm_steps = []
         img_w, img_h = 160, 210  # default MiniWob viewport
-        
-        # Try to infer viewport from first state
-        try:
-            first_state = use_states[0].get("state") or use_states[0].get("tree") or use_states[0]
-            if isinstance(first_state, dict):
-                rw = first_state.get("width")
-                rh = first_state.get("height")
-                if isinstance(rw, (int, float)) and isinstance(rh, (int, float)) and rw > 0 and rh > 0:
-                    img_w, img_h = float(rw), float(rh)
-        except Exception:
-            pass
 
         def pick_node_from_state(state_dict: dict) -> dict:
-            # Prefer focused node, else clickable, else first
+            # Prefer focused node if present at root, else just use root
             try:
-                tree = state_dict.get("tree") or state_dict.get("state") or state_dict
-                q = [tree]
-                candidates = []
-                while q:
-                    n = q.pop(0)
-                    if isinstance(n, dict):
-                        if n.get("focused") is True:
-                            return n
-                        candidates.append(n)
-                        for c in n.get("children", []) or []:
-                            q.append(c)
-                # Clickable-like
-                for n in candidates:
-                    classes = str(n.get("classes", "")).lower()
-                    if any(k in classes for k in ["button", "link", "click", "reply", "like"]):
-                        return n
-                return candidates[0] if candidates else {}
+                tree = state_dict.get("tree") or state_dict.get("state") or state_dict.get("dom") or state_dict
+                if isinstance(tree, dict):
+                    if tree.get("focused") is True:
+                        return tree
+                    return tree
             except Exception:
                 return {}
 
-        for i, step_dict in enumerate(use_states):
+        for i, step_dict in enumerate(use_states[:3]):  # limit per-episode steps for speed
             # MiniWob++ schema: each step has 'time', 'action_type', 'dom' (tree)
             # Extract action info
             act = step_dict.get("action", {})
@@ -459,15 +429,16 @@ def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
             
             instr = f"{task_name} [{act_type}]"
             if coords is None:
-                # Derive from DOM tree (step_dict contains 'dom' field)
+                # Derive from DOM tree (use root center)
                 dom_tree = step_dict.get("dom") or step_dict.get("state") or step_dict.get("tree") or {}
-                node = pick_node_from_state({"tree": dom_tree} if dom_tree else step_dict)
+                node = pick_node_from_state({"tree": dom_tree} if isinstance(dom_tree, dict) else step_dict)
                 try:
-                    left = float(node.get("left", 0.0))
-                    top = float(node.get("top", 0.0))
-                    width = float(node.get("width", 0.0))
-                    height = float(node.get("height", 0.0))
-                    coords = [left + width / 2.0, top + height / 2.0]
+                    rw = float(node.get("width", img_w))
+                    rh = float(node.get("height", img_h))
+                    lx = float(node.get("left", 0.0))
+                    ly = float(node.get("top", 0.0))
+                    img_w, img_h = (rw, rh) if rw > 0 and rh > 0 else (img_w, img_h)
+                    coords = [lx + rw / 2.0, ly + rh / 2.0]
                 except Exception:
                     pass
             
@@ -498,7 +469,12 @@ def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
             continue
         samples.append({"base_img_url": None, "steps": norm_steps})
 
-    print(f"MiniWob++ loaded {len(samples)} multi-turn items from {len(shard_files)} shards")
+            if len(samples) >= max_samples:
+                break
+        if len(samples) >= max_samples:
+            break
+
+    print(f"MiniWob++ loaded {len(samples)} multi-turn items from {len(shard_files)} shards (capped at {max_samples})")
     print(f"DEBUG: Skipped {skipped_no_processed} (no processed_states), {skipped_no_steps} (no valid steps), {skipped_no_coords} step coords missing")
     return img_dir, samples
 
