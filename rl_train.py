@@ -161,6 +161,177 @@ def load_split_items(dataset_dir: str, dataset: str, split: str) -> Tuple[str, L
         # Return empty img_dir so that downstream os.path.join("", abs_path) yields abs_path
         return "", samples
 
+    # Salesforce parquet-based grounding datasets (load all .parquet files)
+    if dataset.lower() in ("salesforce", "salesforce-parquet", "screenspot-parquet", "screenspot-parquet"):
+        # Resolve 'split' to either a parquet file or a directory containing parquets
+        base_path = split
+        if not os.path.isabs(base_path):
+            cand = os.path.join(dataset_dir, base_path)
+            base_path = cand if os.path.exists(cand) else base_path
+
+        parq_files: List[str] = []
+        if os.path.isdir(base_path):
+            for root, _, files in os.walk(base_path):
+                for name in files:
+                    if name.lower().endswith(".parquet") or name.lower().endswith(".parq"):
+                        parq_files.append(os.path.join(root, name))
+        elif os.path.isfile(base_path) and (base_path.lower().endswith(".parquet") or base_path.lower().endswith(".parq")):
+            parq_files.append(base_path)
+        else:
+            # If split is not a path, fallback to searching under dataset_dir/split
+            search_dir = os.path.join(dataset_dir, str(split))
+            if os.path.isdir(search_dir):
+                for root, _, files in os.walk(search_dir):
+                    for name in files:
+                        if name.lower().endswith(".parquet") or name.lower().endswith(".parq"):
+                            parq_files.append(os.path.join(root, name))
+
+        if not parq_files:
+            return "", []
+
+        # Lazy imports to avoid hard dependency if not used
+        pd = None
+        pq = None
+        try:
+            import pandas as pd  # type: ignore
+        except Exception:
+            pd = None
+        if pd is None:
+            try:
+                import pyarrow.parquet as pq  # type: ignore
+            except Exception:
+                pq = None
+
+        samples: List[dict] = []
+
+        def resolve_image_path(path_value: str, parq_path: str) -> str:
+            if not path_value:
+                return ""
+            if os.path.isabs(path_value) and os.path.exists(path_value):
+                return path_value
+            cand1 = os.path.join(dataset_dir, path_value)
+            if os.path.exists(cand1):
+                return cand1
+            base_dir = os.path.dirname(parq_path)
+            cand2 = os.path.join(base_dir, path_value)
+            if os.path.exists(cand2):
+                return cand2
+            return ""
+
+        def coerce_list(val):
+            if isinstance(val, (list, tuple)):
+                return list(val)
+            return None
+
+        for pfile in parq_files:
+            try:
+                if pd is not None:
+                    df = pd.read_parquet(pfile)
+                elif pq is not None:
+                    df = pq.read_table(pfile).to_pandas()
+                else:
+                    continue
+            except Exception:
+                continue
+
+            # Normalize column names to simplify matching
+            cols = {str(c): c for c in df.columns}
+            def get_val(row, names):
+                for n in names:
+                    if n in row and row[n] is not None:
+                        return row[n]
+                return None
+
+            for _, row in df.iterrows():
+                # Image path candidates
+                img_val = get_val(row, [
+                    "image_path", "img_path", "image", "img", "screenshot_path", "image_file", "image_url"
+                ])
+                if isinstance(img_val, (bytes, bytearray)):
+                    try:
+                        img_val = img_val.decode("utf-8", errors="ignore")
+                    except Exception:
+                        img_val = str(img_val)
+                if not isinstance(img_val, str):
+                    img_val = str(img_val) if img_val is not None else ""
+                abs_img = resolve_image_path(img_val, pfile)
+                if not abs_img:
+                    continue
+
+                # Determine image size
+                try:
+                    with Image.open(abs_img) as im:
+                        iw, ih = im.size
+                except Exception:
+                    continue
+
+                # Instruction candidates
+                instr = get_val(row, ["task", "instruction", "query", "goal", "caption", "description", "text"])
+                if instr is None:
+                    instr = "Locate the target region"
+                else:
+                    instr = str(instr)
+
+                # Target: prefer bbox, else point
+                bbox = get_val(row, ["bbox", "target_bbox", "box", "rect"])
+                point_x = get_val(row, ["point_x", "cx", "center_x", "x_center", "target_x", "x"])
+                point_y = get_val(row, ["point_y", "cy", "center_y", "y_center", "target_y", "y"])
+
+                cx_norm = None
+                cy_norm = None
+
+                # Parse bbox if available
+                blist = coerce_list(bbox)
+                if blist is None and isinstance(bbox, str):
+                    try:
+                        blist = ast.literal_eval(bbox)
+                        blist = blist if isinstance(blist, (list, tuple)) else None
+                    except Exception:
+                        blist = None
+                if blist is not None and len(blist) >= 4:
+                    try:
+                        bx, by, bw, bh = float(blist[0]), float(blist[1]), float(blist[2]), float(blist[3])
+                        cx = bx + bw / 2.0
+                        cy = by + bh / 2.0
+                        cx_norm = cx / max(1.0, float(iw))
+                        cy_norm = cy / max(1.0, float(ih))
+                    except Exception:
+                        cx_norm = None
+                        cy_norm = None
+
+                # Fallback to point
+                if (cx_norm is None or cy_norm is None) and (point_x is not None and point_y is not None):
+                    try:
+                        px = float(point_x)
+                        py = float(point_y)
+                        if max(abs(px), abs(py)) > 1.0001:
+                            cx_norm = px / max(1.0, float(iw))
+                            cy_norm = py / max(1.0, float(ih))
+                        else:
+                            cx_norm = px
+                            cy_norm = py
+                    except Exception:
+                        cx_norm = None
+                        cy_norm = None
+
+                if cx_norm is None or cy_norm is None:
+                    continue
+
+                cx_norm = min(1.0, max(0.0, float(cx_norm)))
+                cy_norm = min(1.0, max(0.0, float(cy_norm)))
+
+                samples.append({
+                    "img_url": os.path.abspath(abs_img),
+                    "element": [
+                        {
+                            "instruction": instr,
+                            "point": [cx_norm, cy_norm],
+                        }
+                    ],
+                })
+
+        return "", samples
+
     # Default ShowUI-style datasets
     base_image_dir = os.path.join(dataset_dir, dataset_mapping[dataset])
     meta_dir = os.path.join(base_image_dir, "metadata")
@@ -519,6 +690,13 @@ def reinforce_step(model, processor, device, batch, args: RLArgs):
     except Exception:
         pass
 
+    # lightweight debug: print first couple of step outputs for visibility
+    try:
+        if getattr(args, "_global_step", 0) < 3 and len(decoded) > 0:
+            print(f"[DBG] raw='{decoded[0]}'")
+    except Exception:
+        pass
+
     return loss, float(rewards_tensor.mean().item()), float(entropy_mean.item()), float(kl_loss.item()), sample_pairs
 
 
@@ -864,18 +1042,7 @@ def main():
                 except Exception:
                     pass
 
-            # lightweight debug: print first step raw and parsed output for the first sample
-            if global_step < 3 and len(decoded) > 0:
-                try:
-                    dbg_img_w = None
-                    dbg_img_h = None
-                    if len(meta_list) > 0:
-                        with Image.open(meta_list[0][1]) as _dbg:
-                            dbg_img_w, dbg_img_h = _dbg.size
-                    dbg_parsed = parse_coord(decoded[0], img_size=(dbg_img_w, dbg_img_h) if (dbg_img_w and dbg_img_h) else None)
-                    print(f"[DBG] raw='{decoded[0]}' parsed={dbg_parsed}")
-                except Exception:
-                    pass
+            # debug prints moved into reinforce_step where decoded/meta_list are in scope
 
             global_step += 1
             try:
