@@ -469,8 +469,8 @@ def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
             continue
         samples.append({"base_img_url": None, "steps": norm_steps})
 
-            if len(samples) >= max_samples:
-                break
+        if len(samples) >= max_samples:
+            break
         if len(samples) >= max_samples:
             break
 
