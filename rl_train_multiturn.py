@@ -182,26 +182,38 @@ def load_osworld_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
 
 
 def load_mind2web_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
-    """Load Mind2Web-style multi-turn items, mapped into (instruction, point[, img_url]) steps.
-    Expects a preprocessed JSON with per-step 'instruction' and either 'point' (normalized) or 'bbox' plus 'img_size'.
+    """Load Mind2Web from HF shards data/train/*.json (raw osunlp/Mind2Web format).
+    Reference: https://huggingface.co/datasets/osunlp/Mind2Web
+    Maps action sequences into multi-turn steps with per-step instructions and targets.
     """
+    import glob
     base_dir = os.path.join(dataset_dir, "Mind2Web")
-    meta_dir = os.path.join(base_dir, "metadata")
-    img_dir = os.path.join(base_dir, "images")
-    meta_path = os.path.join(meta_dir, f"{split}.json")
-    with open(meta_path) as f:
-        raw = json.load(f)
+    data_dir = os.path.join(base_dir, "data")
+    # Map split name to HF folder (train, test_task, test_website, test_domain)
+    split_map = {"train": "train", "hf_train": "train", "test": "test_task", "test_task": "test_task", "test_website": "test_website", "test_domain": "test_domain"}
+    split_dir = os.path.join(data_dir, split_map.get(split, split))
+    if not os.path.isdir(split_dir):
+        raise FileNotFoundError(f"Mind2Web split folder not found: {split_dir}. Download with: huggingface-cli download osunlp/Mind2Web --repo-type dataset --local-dir {base_dir}")
+    
+    shard_files = sorted(glob.glob(os.path.join(split_dir, "*.json")))
+    if not shard_files:
+        raise FileNotFoundError(f"No JSON shards in {split_dir}")
+    
+    raw = []
+    for fp in shard_files:
+        with open(fp) as f:
+            raw.extend(json.load(f))
+    
+    # For now, no images; render on-the-fly or skip img_url
+    # If you have a render script, run it first or point img_dir to a rendered screenshot folder
+    img_dir = os.path.join(base_dir, "screenshots")
+    if not os.path.isdir(img_dir):
+        img_dir = os.path.join(base_dir, "images")
 
-    def normalize_point(step, img_w=None, img_h=None):
-        if "point" in step and isinstance(step["point"], (list, tuple)) and len(step["point"]) == 2:
+    def normalize_point(bbox, img_w=None, img_h=None):
+        if bbox and isinstance(bbox, (list, tuple)) and len(bbox) == 4 and img_w and img_h:
             try:
-                x, y = float(step["point"][0]), float(step["point"][1])
-                return [min(1.0, max(0.0, x)), min(1.0, max(0.0, y))]
-            except Exception:
-                return None
-        if "bbox" in step and isinstance(step["bbox"], (list, tuple)) and len(step["bbox"]) == 4 and img_w and img_h:
-            try:
-                x, y, w, h = step["bbox"]
+                x, y, w, h = bbox
                 cx = (x + w / 2.0) / float(img_w)
                 cy = (y + h / 2.0) / float(img_h)
                 return [min(1.0, max(0.0, cx)), min(1.0, max(0.0, cy))]
@@ -211,72 +223,122 @@ def load_mind2web_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
 
     samples: List[dict] = []
     for item in raw:
-        steps_src = item.get("steps") or item.get("trajectory") or []
-        base_img_url = item.get("img_url") or item.get("base_img_url") or None
-        img_size = item.get("img_size")
-        img_w, img_h = (img_size[0], img_size[1]) if isinstance(img_size, (list, tuple)) and len(img_size) == 2 else (None, None)
+        # Mind2Web raw schema: "confirmed_task", "actions": [{"action_uid", "operation": {"op", "value"}, "pos_candidates": [...]}]
+        task = item.get("confirmed_task", "")
+        actions = item.get("actions", [])
+        if not actions:
+            continue
         norm_steps = []
-        for st in steps_src:
-            instr = st.get("instruction") or st.get("utterance") or st.get("action_desc") or ""
-            s_img = st.get("img_url") or base_img_url
-            pt = normalize_point(st, img_w=img_w, img_h=img_h)
+        for act in actions:
+            op = act.get("operation", {})
+            op_type = op.get("op", "CLICK")
+            op_val = op.get("value", "")
+            # Instruction is task + action type [+ value if TYPE/SELECT]
+            if op_type == "TYPE":
+                instr = f"{task} [Type: {op_val}]"
+            elif op_type == "SELECT":
+                instr = f"{task} [Select: {op_val}]"
+            else:
+                instr = f"{task} [Click]"
+            # Extract target from pos_candidates (first positive element's attributes → bbox)
+            pos_cands = act.get("pos_candidates", [])
+            if not pos_cands:
+                continue
+            # Parse attributes JSON string to get bbox
+            try:
+                attrs = json.loads(pos_cands[0].get("attributes", "{}"))
+                bbox_str = attrs.get("bounding_box_rect") or attrs.get("rect") or None
+                if bbox_str and isinstance(bbox_str, str):
+                    # Format like "x,y,width,height"
+                    parts = [float(v.strip()) for v in bbox_str.split(",")]
+                    if len(parts) == 4:
+                        x, y, w, h = parts
+                        # Derive img_w/img_h from viewport or heuristic (1920x1080 default)
+                        img_w, img_h = 1920, 1080
+                        pt = normalize_point([x, y, w, h], img_w=img_w, img_h=img_h)
+                    else:
+                        pt = None
+                else:
+                    pt = None
+            except Exception:
+                pt = None
             if pt is None:
                 continue
+            # Image rendering: you'd use action_uid or cleaned_html to render a screenshot
+            # For now, placeholder; if you have a render script, save to img_dir/<action_uid>.png
+            s_img = f"{act.get('action_uid', 'unknown')}.png"
             norm_steps.append({"instruction": instr, "point": pt, "img_url": s_img})
         if len(norm_steps) == 0:
             continue
-        samples.append({"base_img_url": base_img_url, "steps": norm_steps})
+        samples.append({"base_img_url": None, "steps": norm_steps})
 
+    print(f"Mind2Web loaded {len(samples)} multi-turn items from {len(shard_files)} shards")
     return img_dir, samples
 
 
 def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
-    """Load MiniWob++-style items into multi-turn steps.
-    Expects a JSON with per-episode 'steps' including 'instruction' (or task name) and 'point' normalized.
+    """Load MiniWob++ from HF parquet shards (LucasThil/miniwob_plusplus_v2_raw format).
+    Reference: https://huggingface.co/datasets/LucasThil/miniwob_plusplus_v2_raw/tree/main/data
+    Maps episodes into multi-turn steps with per-step actions and targets.
     """
+    import glob
+    try:
+        import pyarrow.parquet as pq
+    except ImportError:
+        raise ImportError("pyarrow is required to read MiniWob++ parquet. Install: pip install pyarrow")
+    
     base_dir = os.path.join(dataset_dir, "MiniWob")
-    meta_dir = os.path.join(base_dir, "metadata")
-    img_dir = os.path.join(base_dir, "images")
-    meta_path = os.path.join(meta_dir, f"{split}.json")
-    with open(meta_path) as f:
-        raw = json.load(f)
-
-    def normalize_point(step, img_w=None, img_h=None):
-        if "point" in step and isinstance(step["point"], (list, tuple)) and len(step["point"]) == 2:
-            try:
-                x, y = float(step["point"][0]), float(step["point"][1])
-                return [min(1.0, max(0.0, x)), min(1.0, max(0.0, y))]
-            except Exception:
-                return None
-        if "bbox" in step and isinstance(step["bbox"], (list, tuple)) and len(step["bbox"]) == 4 and img_w and img_h:
-            try:
-                x, y, w, h = step["bbox"]
-                cx = (x + w / 2.0) / float(img_w)
-                cy = (y + h / 2.0) / float(img_h)
-                return [min(1.0, max(0.0, cx)), min(1.0, max(0.0, cy))]
-            except Exception:
-                return None
-        return None
+    data_dir = os.path.join(base_dir, "data")
+    if not os.path.isdir(data_dir):
+        raise FileNotFoundError(f"MiniWob++ data folder not found: {data_dir}. Download with: huggingface-cli download LucasThil/miniwob_plusplus_v2_raw --repo-type dataset --local-dir {base_dir}")
+    
+    # Read all train-*.parquet files
+    shard_files = sorted(glob.glob(os.path.join(data_dir, "train-*.parquet")))
+    if not shard_files:
+        raise FileNotFoundError(f"No parquet shards in {data_dir}")
+    
+    raw = []
+    for fp in shard_files:
+        table = pq.read_table(fp)
+        raw.extend(table.to_pylist())
+    
+    # Images: render on-the-fly or skip; for now placeholder
+    img_dir = os.path.join(base_dir, "screenshots")
+    if not os.path.isdir(img_dir):
+        img_dir = os.path.join(base_dir, "images")
 
     samples: List[dict] = []
     for item in raw:
-        steps_src = item.get("steps") or item.get("trajectory") or []
-        base_img_url = item.get("img_url") or item.get("base_img_url") or None
-        img_size = item.get("img_size")
-        img_w, img_h = (img_size[0], img_size[1]) if isinstance(img_size, (list, tuple)) and len(img_size) == 2 else (None, None)
-        task_name = item.get("task") or item.get("env") or ""
+        # MiniWob++ schema: "subdomain" (task name), "states" (list of DOM states), "actions" (list of actions), "rewards" (list of per-step rewards)
+        task_name = item.get("subdomain", "") or item.get("task", "")
+        states = item.get("states", [])
+        actions_raw = item.get("actions", [])
+        if not actions_raw or not states:
+            continue
+        # Build per-step instructions and targets from actions
+        # Action schema (example): {"action_type": "click", "coords": [x, y], ...}
         norm_steps = []
-        for st in steps_src:
-            instr = st.get("instruction") or task_name or ""
-            s_img = st.get("img_url") or base_img_url
-            pt = normalize_point(st, img_w=img_w, img_h=img_h)
+        img_w, img_h = 160, 210  # default MiniWob viewport size
+        for i, act in enumerate(actions_raw):
+            act_type = act.get("action_type", "")
+            coords = act.get("coords", [])
+            # Instruction is task + action type
+            instr = f"{task_name} [{act_type}]"
+            if len(coords) == 2:
+                # coords are pixel [x, y]; normalize to [0,1]
+                pt = [min(1.0, max(0.0, float(coords[0]) / img_w)), min(1.0, max(0.0, float(coords[1]) / img_h))]
+            else:
+                pt = None
             if pt is None:
                 continue
+            # Image: would render from states[i]; placeholder for now
+            s_img = f"step_{i}.png"
             norm_steps.append({"instruction": instr, "point": pt, "img_url": s_img})
         if len(norm_steps) == 0:
             continue
-        samples.append({"base_img_url": base_img_url, "steps": norm_steps})
+        samples.append({"base_img_url": None, "steps": norm_steps})
 
+    print(f"MiniWob++ loaded {len(samples)} multi-turn items from {len(shard_files)} shards")
     return img_dir, samples
 
 
