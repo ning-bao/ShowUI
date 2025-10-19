@@ -1,0 +1,2602 @@
+[
+  {
+    "id": "office-home-tab-1",
+    "app": "Office",
+    "goal": "Switch to the Home tab",
+    "rubric": "The Home tab is visibly selected on the ribbon, and the ribbon shows the Home tools (e.g., Clipboard with Paste/Cut/Copy, Font, and Paragraph groups).",
+    "target_bbox": [
+      103,
+      88,
+      85,
+      63
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_2434.png"
+  },
+  {
+    "id": "close-binaries-tab",
+    "app": "Files",
+    "goal": "Close the 'Binaries' tab",
+    "rubric": "The 'Binaries' tab label and its close button are no longer visible in the tab bar after the click.",
+    "target_bbox": [
+      571,
+      9,
+      148,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1650.png"
+  },
+  {
+    "id": "calendar-collapse-contacts-fr",
+    "app": "Browser",
+    "goal": "Collapse the \u201cCalendriers des contacts\u201d section",
+    "rubric": "Success if the caret next to \u201cCalendriers des contacts\u201d points right and no sub-calendars are visible beneath that header.",
+    "target_bbox": [
+      70,
+      665,
+      263,
+      46
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_6.png"
+  },
+  {
+    "id": "task-ckbox-001",
+    "app": "Browser",
+    "goal": "Tick the checkbox.",
+    "rubric": "Pass if the checkbox at the target location is visibly checked (shows a tick/checkmark or filled state) instead of an empty square.",
+    "target_bbox": [
+      1091,
+      208,
+      17,
+      17
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_3092.png"
+  },
+  {
+    "id": "select-radio-001",
+    "app": "Settings",
+    "goal": "Select this radio button",
+    "rubric": "Success if the radio button appears selected (a filled dot inside the circle) in the final screenshot; it should no longer be an empty circle.",
+    "target_bbox": [
+      1262,
+      470,
+      25,
+      25
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_455.png"
+  },
+  {
+    "id": "t-par-defaut-radio-001",
+    "app": "Settings",
+    "goal": "Select the \u201cPar d\u00e9faut\u201d radio option",
+    "rubric": "Pass if the radio button next to the label \u201cPar d\u00e9faut\u201d appears selected (filled dot inside the circle) in the resulting screenshot.",
+    "target_bbox": [
+      44,
+      242,
+      120,
+      22
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1643.png"
+  },
+  {
+    "id": "browser-activate-thankyou-tab",
+    "app": "Browser",
+    "goal": "Activate the 'Thank You' browser tab",
+    "rubric": "Success if the browser's tab strip shows the 'Thank You' tab as the active/selected tab (highlighted in the foreground) with other tabs not selected.",
+    "target_bbox": [
+      974,
+      9,
+      183,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_86.png"
+  },
+  {
+    "id": "close-outputs-tab-x",
+    "app": "Browser",
+    "goal": "Close the 'outputs' tab",
+    "rubric": "The tab labeled 'outputs' disappears from the tab bar and is no longer visible among open tabs.",
+    "target_bbox": [
+      162,
+      9,
+      148,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1647.png"
+  },
+  {
+    "id": "browser-close-enquete-tab-1",
+    "app": "Browser",
+    "goal": "Click the X to close the 'Enqu\u00eate de s...' tab.",
+    "rubric": "Success if the tab titled 'Enqu\u00eate de s...' disappears from the tab strip and is no longer visible in the browser window.",
+    "target_bbox": [
+      1316,
+      9,
+      183,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_18.png"
+  },
+  {
+    "id": "task-formacao-001",
+    "app": "Office",
+    "goal": "Place the text cursor on the \u201cForma\u00e7\u00e3o\u201d heading.",
+    "rubric": "Success if the insertion caret is visible within or immediately adjacent to the word \u201cForma\u00e7\u00e3o\u201d on its heading line in the document.",
+    "target_bbox": [
+      1597,
+      97,
+      156,
+      49
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_3852.png"
+  },
+  {
+    "id": "task-6b7e9f2c",
+    "app": "Browser",
+    "goal": "Close the \u201cFormulaire de Consentement\u201d tab",
+    "rubric": "Success if the tab bar no longer contains a tab titled \u201cFormulaire de Consentement\u201d and another tab becomes visible as the active page.",
+    "target_bbox": [
+      715,
+      9,
+      310,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_682.png"
+  },
+  {
+    "id": "close-google-tab-x-001",
+    "app": "Browser",
+    "goal": "Click the X to close this tab.",
+    "rubric": "The tab with the purple spreadsheet icon and the title starting with 'Googl' is no longer visible in the browser's tab bar.",
+    "target_bbox": [
+      1410,
+      9,
+      135,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1378.png"
+  },
+  {
+    "id": "settings-radio-select-001",
+    "app": "Settings",
+    "goal": "Select this option by clicking its radio button.",
+    "rubric": "Success if the targeted radio button appears selected with a filled inner dot, indicating this option is active.",
+    "target_bbox": [
+      75,
+      563,
+      17,
+      17
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_2089.png"
+  },
+  {
+    "id": "files-clear-search-x",
+    "app": "Files",
+    "goal": "Clear the search field",
+    "rubric": "The search box shows no typed text and displays its placeholder; the clear (X) icon is no longer visible.",
+    "target_bbox": [
+      1286,
+      9,
+      135,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1381.png"
+  },
+  {
+    "id": "browser-close-tab-google-x-001",
+    "app": "Browser",
+    "goal": "Close this browser tab by clicking its X button.",
+    "rubric": "The tab with the purple document icon and label starting with 'Googl' no longer appears in the tab strip; the total number of tabs is reduced by one and an adjacent tab shifts into its place.",
+    "target_bbox": [
+      1410,
+      9,
+      135,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1365.png"
+  },
+  {
+    "id": "task-001",
+    "app": "Browser",
+    "goal": "Close the yellow notification banner at the top",
+    "rubric": "Success if the yellow horizontal banner at the very top of the browser window is no longer visible in the screenshot and the page content shifts up to occupy the space.",
+    "target_bbox": [
+      190,
+      56,
+      1287,
+      33
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_288.png"
+  },
+  {
+    "id": "addrbar-focus-001",
+    "app": "Browser",
+    "goal": "Click the address/search bar to focus it",
+    "rubric": "Success if the address/search bar shows an active focus highlight with a visible text insertion caret inside the field.",
+    "target_bbox": [
+      642,
+      785,
+      265,
+      51
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_920.png"
+  },
+  {
+    "id": "task-ck-001",
+    "app": "Settings",
+    "goal": "Check the 'Enable automatic updates' option.",
+    "rubric": "Success if the checkbox at the specified location is visibly checked (shows a checkmark or filled state) in the Settings window.",
+    "target_bbox": [
+      675,
+      818,
+      17,
+      17
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_2385.png"
+  },
+  {
+    "id": "task-blank-page-click-001",
+    "app": "Office",
+    "goal": "Click inside the blank document page to place the typing cursor.",
+    "rubric": "Pass if the screenshot shows a visible text insertion caret within the document page area (not in the ribbon, title bar, or any dialog).",
+    "target_bbox": [
+      1440,
+      604,
+      2,
+      2
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1500.png"
+  },
+  {
+    "id": "t-0001",
+    "app": "Browser",
+    "goal": "Click the address bar to focus it",
+    "rubric": "Pass if the browser\u2019s address bar is visibly focused: the URL text is selected or a text cursor is visible inside the address field.",
+    "target_bbox": [
+      555,
+      464,
+      26,
+      26
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1693.png"
+  },
+  {
+    "id": "browser-close-hug-tab-001",
+    "app": "Browser",
+    "goal": "Close the 'Hugging Face' tab.",
+    "rubric": "In the browser\u2019s tab bar, there is no tab showing the yellow hugging-face icon or a title containing 'Hug'.",
+    "target_bbox": [
+      277,
+      9,
+      127,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1539.png"
+  },
+  {
+    "id": "task-7a3e3c8a-6d3c-4c03-9c65-0e5f9c1fd2a5",
+    "app": "Files",
+    "goal": "Click the empty area in the file list to deselect any selected items.",
+    "rubric": "Success when no files or folders in the file list show a selection highlight and no context menu is open.",
+    "target_bbox": [
+      924,
+      204,
+      2,
+      2
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1149.png"
+  },
+  {
+    "id": "task-b3f3d7b1-1c9c-4b57-8b1a-7a3f9f9a6e2c",
+    "app": "Browser",
+    "goal": "Open a new browser tab by clicking the + button.",
+    "rubric": "Success when a new tab becomes active and the tab strip shows an additional tab labeled New Tab (or equivalent) with the browser\u2019s new tab page visible.",
+    "target_bbox": [
+      555,
+      796,
+      26,
+      26
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1693.png"
+  },
+  {
+    "id": "browser-login-btn-001",
+    "app": "Browser",
+    "goal": "Click the Login button.",
+    "rubric": "Success when the page reflects a signed-in state: the green Login button is no longer visible and a visible button or link labeled Logout (or Profile) appears in the header.",
+    "target_bbox": [
+      776,
+      651,
+      82,
+      45
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_2061.png"
+  },
+  {
+    "id": "task-6b1f1f0a",
+    "app": "Office",
+    "goal": "Click inside the blank document page to focus the editor",
+    "rubric": "Success if a text caret is visible within the document page area, indicating the page canvas is focused (not the ribbon or side panels).",
+    "target_bbox": [
+      1440,
+      383,
+      2,
+      2
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1511.png"
+  },
+  {
+    "id": "login-submit-browser-1d3a",
+    "app": "Browser",
+    "goal": "Click the LOGIN button to submit the sign-in.",
+    "rubric": "Success if the browser view switches to an authenticated state where a visible control labeled \"LOGOUT\" (or \"Sign out\") appears in the header and the teal \"LOGIN\" button is no longer present.",
+    "target_bbox": [
+      735,
+      589,
+      450,
+      71
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_2079.png"
+  },
+  {
+    "id": "task-9a6b7f2c",
+    "app": "Browser",
+    "goal": "Close the \u201cEnqu\u00eate de\u2026\u201d tab",
+    "rubric": "The browser tab titled \u201cEnqu\u00eate de\u2026\u201d is no longer visible in the tab bar; an adjacent tab becomes active and there is one fewer tab than before.",
+    "target_bbox": [
+      1316,
+      9,
+      183,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_106.png"
+  },
+  {
+    "id": "6f1a33a3-bafd-4ac7-8e5a-4f4b71a4d3c7",
+    "app": "Browser",
+    "goal": "Open the dropdown menu by clicking the small arrow on the right edge of the field.",
+    "rubric": "Success if a dropdown list is visibly expanded from that field (options appear beneath it or the arrow changes to an up arrow). Fail if no menu is open.",
+    "target_bbox": [
+      1001,
+      601,
+      52,
+      27
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_514.png"
+  },
+  {
+    "id": "task-responses-tab-001",
+    "app": "Browser",
+    "goal": "Open the Responses tab",
+    "rubric": "Success if the Responses tab is visibly selected (highlighted/underlined) and the page shows the Responses view (e.g., a header or charts/summary for responses) instead of the Questions view.",
+    "target_bbox": [
+      918,
+      183,
+      119,
+      46
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1386.png"
+  },
+  {
+    "id": "bc-chevron-1",
+    "app": "Files",
+    "goal": "Click the breadcrumb chevron to open the subfolder dropdown.",
+    "rubric": "Success if a dropdown menu listing subfolders appears beneath the path bar, aligned with the clicked chevron; failure if no dropdown is visible or a different page opens.",
+    "target_bbox": [
+      585,
+      276,
+      41,
+      41
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_6.png"
+  },
+  {
+    "id": "c7d3b6a2-6b0a-4e0d-a3e4-e2c9f0fb1d3a",
+    "app": "Browser",
+    "goal": "Close the \u201cDemander un\u201d banner by clicking its X button",
+    "rubric": "Success when the small banner labeled \u201cDemander un\u201d is no longer visible anywhere in the screenshot (its text and X icon are gone).",
+    "target_bbox": [
+      289,
+      9,
+      183,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_647.png"
+  },
+  {
+    "id": "task-retour-browser-001",
+    "app": "Browser",
+    "goal": "Click the \u201cRetour\u201d button to go back to the previous page.",
+    "rubric": "Success if the view navigates away from the current page so that the \u201cRetour\u201d button is no longer visible in the same location and the page content is different from the initial screenshot.",
+    "target_bbox": [
+      539,
+      820,
+      93,
+      46
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_408.png"
+  },
+  {
+    "id": "browser-select-na-option-001",
+    "app": "Browser",
+    "goal": "Select the 'N/A' option in the dropdown.",
+    "rubric": "Pass if the form field shows 'N/A' as the currently selected value in the dropdown/input box after the click.",
+    "target_bbox": [
+      539,
+      490,
+      177,
+      27
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_76.png"
+  },
+  {
+    "id": "chk-uncheck-001",
+    "app": "Settings",
+    "goal": "Uncheck the checkbox",
+    "rubric": "Success if the checkbox at the specified location appears empty with no checkmark visible.",
+    "target_bbox": [
+      264,
+      639,
+      21,
+      21
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_3229.png"
+  },
+  {
+    "id": "office-font-size-12",
+    "app": "Office",
+    "goal": "Set the font size to 12 pt",
+    "rubric": "Success if the font size control in the toolbar shows the value '12'. Any other value means failure.",
+    "target_bbox": [
+      305,
+      124,
+      44,
+      24
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1001.png"
+  },
+  {
+    "id": "click-calendar-18",
+    "app": "Desktop",
+    "goal": "Click the date 18 in the calendar",
+    "rubric": "Success if the calendar shows the day '18' as selected (its cell visibly highlighted/active compared to other days).",
+    "target_bbox": [
+      691,
+      619,
+      57,
+      50
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_781.png"
+  },
+  {
+    "id": "browser-close-cour-tab-001",
+    "app": "Browser",
+    "goal": "Close the 'Cour...' tab by clicking its X",
+    "rubric": "Success when the tab whose title begins with 'Cour' (with the same colored favicon) is no longer visible in the tab strip; the total tab count decreases by one and focus moves to an adjacent tab.",
+    "target_bbox": [
+      1427,
+      9,
+      127,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1506.png"
+  },
+  {
+    "id": "pin-recent-office-001",
+    "app": "Office",
+    "goal": "Pin this recent document.",
+    "rubric": "After clicking, the pin icon turns into its pinned/filled state and the item appears under a 'Pinned' section in the Recent list.",
+    "target_bbox": [
+      45,
+      352,
+      26,
+      26
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_784.png"
+  },
+  {
+    "id": "browser_tab-enquete-conditions-select",
+    "app": "Browser",
+    "goal": "Select the tab labeled \"ENQU\u00caTE SUR LES CONDITIONS\".",
+    "rubric": "Success if the tab titled \"ENQU\u00caTE SUR LES CONDITIONS\" is the active tab (visibly highlighted/foreground) and its page content is displayed in the main browser area.",
+    "target_bbox": [
+      1014,
+      9,
+      310,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_408.png"
+  },
+  {
+    "id": "focus-address-bar-001",
+    "app": "Browser",
+    "goal": "Click the address bar to focus it.",
+    "rubric": "Success if the address bar shows a text caret or the entire URL/search text is highlighted indicating focus.",
+    "target_bbox": [
+      834,
+      560,
+      156,
+      31
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_682.png"
+  },
+  {
+    "id": "browser-segweb-banner-click",
+    "app": "Browser",
+    "goal": "Click the \"Segment Anything Web\" banner on the page.",
+    "rubric": "Success if the screenshot still shows the same page with the blue gradient hero section and the white heading \"Segment Anything Web\" centered; the click lands within that header area.",
+    "target_bbox": [
+      969,
+      28,
+      376,
+      201
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1280.png"
+  },
+  {
+    "id": "settings-slider-min-left-001",
+    "app": "Settings",
+    "goal": "Set the brightness slider to the minimum (far left).",
+    "rubric": "Success if the slider knob is positioned at the extreme left end of its track in the Settings window; if a numeric value is shown it reads 0% or equivalent minimum.",
+    "target_bbox": [
+      1403,
+      907,
+      56,
+      56
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_140.png"
+  },
+  {
+    "id": "task-9b9c1f1f-d28a-4d2d-9f9d-8b3b7f6a7c31",
+    "app": "Browser",
+    "goal": "Click the Last name field showing \u201cDoe\u201d.",
+    "rubric": "Success if the Last name input is focused (focus outline/caret visible) and the value remains \u201cDoe\u201d.",
+    "target_bbox": [
+      500,
+      160,
+      436,
+      40
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_2281.png"
+  },
+  {
+    "id": "nav-to-page-12",
+    "app": "Browser",
+    "goal": "Click the page 12 thumbnail to open page 12",
+    "rubric": "The document viewer\u2019s current page indicator shows 12 as the active page (e.g., '12 of N').",
+    "target_bbox": [
+      268,
+      383,
+      31,
+      31
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1148.png"
+  },
+  {
+    "id": "browser_tab_activate_questionnaire_client_salon",
+    "app": "Browser",
+    "goal": "Activate the browser tab titled \"Questionnaire de Client de Salon\".",
+    "rubric": "Success when the active tab in the browser\u2019s tab bar shows the exact title \"Questionnaire de Client de Salon\" and appears selected (focused) compared to other tabs.",
+    "target_bbox": [
+      1312,
+      9,
+      310,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_401.png"
+  },
+  {
+    "id": "open-date-picker-calendar-icon-001",
+    "app": "Browser",
+    "goal": "Click the calendar icon to open the date picker",
+    "rubric": "Success if a calendar popup/dropdown is visible next to the date field (showing a month grid or month header). Fail if only the text field is focused and no calendar is shown.",
+    "target_bbox": [
+      596,
+      731,
+      389,
+      49
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_647.png"
+  },
+  {
+    "id": "task-9f7b2c8a",
+    "app": "Browser",
+    "goal": "Open the options menu for the 'AutoU\u2026h-Ex.zip' download",
+    "rubric": "The Downloads popup remains open and a small context menu for the 'AutoU\u2026h-Ex.zip' item is visible next to that entry (showing item-specific actions).",
+    "target_bbox": [
+      617,
+      221,
+      2,
+      2
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_211.png"
+  },
+  {
+    "id": "browser_prinzadi_link",
+    "app": "Browser",
+    "goal": "Open the 'Prinzadi' link",
+    "rubric": "Success if the browser navigates away from the current list and the address bar URL contains the string 'prinzadi'.",
+    "target_bbox": [
+      521,
+      180,
+      66,
+      21
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_2311.png"
+  },
+  {
+    "id": "browser-activate-modele-tab-001",
+    "app": "Browser",
+    "goal": "Switch to the 'Mod\u00e8l' browser tab.",
+    "rubric": "The 'Mod\u00e8l' tab is the active tab: it appears selected/highlighted in the tab strip and its page content is visible in the main view.",
+    "target_bbox": [
+      1037,
+      9,
+      137,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1353.png"
+  },
+  {
+    "id": "task-add-place-pin-001",
+    "app": "Browser",
+    "goal": "Click the Add place pin button.",
+    "rubric": "Success if a panel or dialog titled \"Add a missing place\" is visible in the browser, showing a form to enter details (e.g., Name, Category, Address).",
+    "target_bbox": [
+      941,
+      781,
+      21,
+      26
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1148.png"
+  },
+  {
+    "id": "task-078e0c2a",
+    "app": "Browser",
+    "goal": "Open the dropdown next to the 'Dr' field",
+    "rubric": "Pass if a dropdown list appears anchored to the 'Dr' field, showing multiple selectable options beneath it.",
+    "target_bbox": [
+      783,
+      285,
+      188,
+      26
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_340.png"
+  },
+  {
+    "id": "close-candidature-tab-bc5c",
+    "app": "Browser",
+    "goal": "Close the \u201cCandidature F\u201d tab",
+    "rubric": "The browser tab labeled \u201cCandidature F\u201d is no longer visible in the tab bar after the action.",
+    "target_bbox": [
+      802,
+      9,
+      183,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_674.png"
+  },
+  {
+    "id": "browser-arts-antiques-category",
+    "app": "Browser",
+    "goal": "Open the \u201cArts, antiquit\u00e9s\u201d category.",
+    "rubric": "Pass if the browser navigates to a page where the main heading or breadcrumb visibly reads \u201cArts, antiquit\u00e9s.\u201d",
+    "target_bbox": [
+      1205,
+      342,
+      188,
+      237
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1647.png"
+  },
+  {
+    "id": "settings-radio-select-001",
+    "app": "Settings",
+    "goal": "Select this radio button to enable the option.",
+    "rubric": "Success if, in the final screenshot, the radio button at the specified location displays a filled inner dot indicating it is selected.",
+    "target_bbox": [
+      690,
+      326,
+      17,
+      17
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_2385.png"
+  },
+  {
+    "id": "browser-cdpn-link-open-001",
+    "app": "Browser",
+    "goal": "Open the cdpn.io link.",
+    "rubric": "Success if the browser navigates to a page where the address bar contains 'cdpn.io/tutsplus/fullpage'.",
+    "target_bbox": [
+      181,
+      47,
+      1138,
+      33
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_2295.png"
+  },
+  {
+    "id": "browser_close_candidature_tab",
+    "app": "Browser",
+    "goal": "Close the \u201cCandidature\u201d tab.",
+    "rubric": "Success if the tab labeled \u201cCandidature\u201d is no longer present in the browser\u2019s tab bar in the resulting screenshot.",
+    "target_bbox": [
+      802,
+      9,
+      183,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1036.png"
+  },
+  {
+    "id": "task-001",
+    "app": "Office",
+    "goal": "Click inside the document body to place the text cursor.",
+    "rubric": "Success if a text caret is visible within the main white page area of the document (not in the ribbon, title bar, or side panels), indicating the document canvas is focused.",
+    "target_bbox": [
+      520,
+      871,
+      2,
+      2
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1149.png"
+  },
+  {
+    "id": "browser-top-apps-fr-001",
+    "app": "Browser",
+    "goal": "Open \u201cTop applications gratuites\u201d.",
+    "rubric": "The browser navigates to a page/section showing a list of apps with a prominent heading reading \u201cTop applications gratuites\u201d (top free apps).",
+    "target_bbox": [
+      147,
+      660,
+      347,
+      49
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1530.png"
+  },
+  {
+    "id": "clear-search-files-01",
+    "app": "Files",
+    "goal": "Clear the current search query",
+    "rubric": "Success if the search field is empty and the clear (X) icon is no longer visible; the word 'checklist' must not appear in the search box.",
+    "target_bbox": [
+      1116,
+      9,
+      148,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1647.png"
+  },
+  {
+    "id": "click-email-input-001",
+    "app": "Browser",
+    "goal": "Click the Email input field.",
+    "rubric": "Pass if the Email input box is focused, evidenced by a visible text caret inside it or a distinct focus highlight/border on that field.",
+    "target_bbox": [
+      623,
+      533,
+      655,
+      73
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1890.png"
+  },
+  {
+    "id": "task-office-0001",
+    "app": "Office",
+    "goal": "Click inside the blank page to focus the document body",
+    "rubric": "A blinking text cursor is visible within the white page canvas, indicating the document body is active (not the title bar, ribbon, or side panels).",
+    "target_bbox": [
+      924,
+      585,
+      2,
+      2
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1149.png"
+  },
+  {
+    "id": "checkbox-uncheck-001",
+    "app": "Settings",
+    "goal": "Uncheck the checkbox",
+    "rubric": "Success if the checkbox at the specified location appears empty (no checkmark visible inside the box).",
+    "target_bbox": [
+      675,
+      846,
+      17,
+      17
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_2397.png"
+  },
+  {
+    "id": "a8d6b5e0-5e2b-4f2b-8b3b-8f2b7b1a62dd",
+    "app": "Browser",
+    "goal": "Click the browser\u2019s address/search bar to focus it.",
+    "rubric": "Pass if the address/search bar is focused with a visible text caret inside the field, indicating it is ready for typing.",
+    "target_bbox": [
+      769,
+      677,
+      414,
+      33
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_106.png"
+  },
+  {
+    "id": "browser_gregoire_link_open",
+    "app": "Browser",
+    "goal": "Click the \u201cGregoire\u201d link to open its page.",
+    "rubric": "Success if the resulting view shows a page where the main heading or browser tab/title includes the text \u201cGregoire,\u201d indicating that the link was opened rather than remaining on the list.",
+    "target_bbox": [
+      783,
+      322,
+      108,
+      31
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_614.png"
+  },
+  {
+    "id": "browser-close-huggi-tab-x",
+    "app": "Browser",
+    "goal": "Close the 'Huggi' tab by clicking its X button.",
+    "rubric": "The browser tab labeled starting with 'Huggi' (with the emoji icon) is no longer present in the tab strip.",
+    "target_bbox": [
+      287,
+      9,
+      137,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1353.png"
+  },
+  {
+    "id": "checkbox-toggle-01",
+    "app": "Settings",
+    "goal": "Tick the checkbox to enable the option.",
+    "rubric": "Success if the checkbox is shown as checked (with a checkmark or filled state) instead of empty.",
+    "target_bbox": [
+      546,
+      312,
+      17,
+      17
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_812.png"
+  },
+  {
+    "id": "settings-uncheck-checkbox-001",
+    "app": "Settings",
+    "goal": "Uncheck the checkbox to disable the option.",
+    "rubric": "Success if the checkbox is empty (no white checkmark and no filled color) where the checked red box previously appeared.",
+    "target_bbox": [
+      264,
+      796,
+      21,
+      21
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_3367.png"
+  },
+  {
+    "id": "task-addrbar-focus-001",
+    "app": "Browser",
+    "goal": "Click the address bar to focus it",
+    "rubric": "Success if the browser\u2019s address bar shows focus with a visible text cursor or the entire URL text is highlighted, indicating it\u2019s ready for typing.",
+    "target_bbox": [
+      826,
+      334,
+      59,
+      32
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_405.png"
+  },
+  {
+    "id": "task-click-tab-15-001",
+    "app": "Browser",
+    "goal": "Activate the browser tab with '15' in its title.",
+    "rubric": "The tab whose label includes '15' is the active tab and its page content is displayed in the main view.",
+    "target_bbox": [
+      873,
+      1001,
+      57,
+      50
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_614.png"
+  },
+  {
+    "id": "files-clear-search-x",
+    "app": "Files",
+    "goal": "Clear the search query by clicking the X in the search box.",
+    "rubric": "Success if the search field is empty with no characters visible and the clear (X) icon is no longer shown (placeholder text may reappear).",
+    "target_bbox": [
+      1197,
+      9,
+      127,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1511.png"
+  },
+  {
+    "id": "browser-pagination-7",
+    "app": "Browser",
+    "goal": "Click the pagination number 7 to open page 7.",
+    "rubric": "In the pagination control, the number 7 appears as the active page (distinct style such as bold/dark and non-clickable) while adjacent numbers (e.g., 6 and 8) remain as links.",
+    "target_bbox": [
+      818,
+      952,
+      56,
+      50
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_614.png"
+  },
+  {
+    "id": "6b5c0c2d-9f9e-4e3e-95b7-8b0c2c4e3d71",
+    "app": "Browser",
+    "goal": "Close the \u201ccomm\u2026\u201d browser tab by clicking its X button",
+    "rubric": "Success if the tab whose title starts with \u201ccomm\u201d disappears from the tab bar and is no longer visible among open tabs.",
+    "target_bbox": [
+      162,
+      9,
+      137,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1353.png"
+  },
+  {
+    "id": "contact-select-nicolina-trent",
+    "app": "Office",
+    "goal": "Select the contact 'Nicolina Trent'.",
+    "rubric": "The UI shows 'Nicolina Trent' as the selected item: the row with that name is highlighted/focused or a details pane opens with the header/name 'Nicolina Trent'. No other contact is selected.",
+    "target_bbox": [
+      861,
+      336,
+      295,
+      32
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_714.png"
+  },
+  {
+    "id": "task-settings-slider-left-001",
+    "app": "Settings",
+    "goal": "Drag the slider knob all the way to the left.",
+    "rubric": "Success if the circular slider knob is positioned flush against the left end of the track in the final screenshot. If a numeric value is shown, it should indicate the minimum (e.g., 0%).",
+    "target_bbox": [
+      770,
+      907,
+      56,
+      56
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_140.png"
+  },
+  {
+    "id": "browser-pagination-2",
+    "app": "Browser",
+    "goal": "Go to results page 2",
+    "rubric": "The pagination control shows 2 as the active/current page (visually highlighted or selected) and the content displayed corresponds to page 2.",
+    "target_bbox": [
+      163,
+      348,
+      31,
+      31
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1148.png"
+  },
+  {
+    "id": "browser-click-victoire-link",
+    "app": "Browser",
+    "goal": "Open the 'Victoire' link",
+    "rubric": "Success if the browser navigates to a new page where the tab title or main page heading contains the word 'Victoire'.",
+    "target_bbox": [
+      726,
+      327,
+      109,
+      32
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_514.png"
+  },
+  {
+    "id": "task-email-input-click-001",
+    "app": "Browser",
+    "goal": "Click the 'enter your email' input box.",
+    "rubric": "Success if the email input field is focused with a visible text caret inside the box.",
+    "target_bbox": [
+      959,
+      170,
+      213,
+      38
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_2335.png"
+  },
+  {
+    "id": "browser-close-coronavirus-tab-001",
+    "app": "Browser",
+    "goal": "Close the 'Coronavirus Intake form for Mass...' tab by clicking its X.",
+    "rubric": "The tab titled 'Coronavirus Intake form for Mass...' no longer appears in the browser's tab bar; if it was the only tab, the browser window is closed.",
+    "target_bbox": [
+      1014,
+      9,
+      310,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_847.png"
+  },
+  {
+    "id": "desktop-dismiss-shopathome-notification",
+    "app": "Desktop",
+    "goal": "Dismiss the \u201cShop@Home Experience\u201d popup by clicking its X button.",
+    "rubric": "Success if the popup labeled \u201cShop@Home Experience\u201d is no longer visible anywhere on the screen; no header or card with that text remains.",
+    "target_bbox": [
+      416,
+      9,
+      310,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_991.png"
+  },
+  {
+    "id": "dropdown-chevron-expand-1",
+    "app": "Settings",
+    "goal": "Click the chevron to expand the drop-down menu.",
+    "rubric": "Pass if a drop-down list appears directly below this control showing multiple options, or the chevron changes to an upward arrow indicating the menu is expanded.",
+    "target_bbox": [
+      740,
+      808,
+      51,
+      29
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_614.png"
+  },
+  {
+    "id": "task-books-category-fr-001",
+    "app": "Browser",
+    "goal": "Open the 'Livres, BD, revues' category.",
+    "rubric": "Success if the page navigates to the books section and the new view shows a prominent heading or breadcrumb containing the text 'Livres, BD, revues' or 'Livres' at the top, indicating the books category page.",
+    "target_bbox": [
+      526,
+      648,
+      187,
+      238
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1647.png"
+  },
+  {
+    "id": "checkbox-uncheck-1",
+    "app": "Browser",
+    "goal": "Uncheck the selected checkbox",
+    "rubric": "Success if the checkbox at the target location no longer shows a checkmark (the tick icon disappears), indicating the option is off.",
+    "target_bbox": [
+      264,
+      524,
+      21,
+      21
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_3367.png"
+  },
+  {
+    "id": "task-browser-open-coronavirus-form-tab-001",
+    "app": "Browser",
+    "goal": "Open the \u201cCoronavirus Intake form for Mass\u2026\u201d tab.",
+    "rubric": "Success if the browser\u2019s active tab shows the title starting with \u201cCoronavirus Intake form\u201d (foreground/selected styling) and that tab is focused as the current page.",
+    "target_bbox": [
+      1014,
+      9,
+      310,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_548.png"
+  },
+  {
+    "id": "task-9b1",
+    "app": "Office",
+    "goal": "Open the message titled \u201cPoint de s\u2026\u201d from 9:40.",
+    "rubric": "Success if the reading pane displays the email whose subject begins with \u201cPoint de s\u201d, and the corresponding list item is shown as selected in the message list.",
+    "target_bbox": [
+      525,
+      943,
+      131,
+      29
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1148.png"
+  },
+  {
+    "id": "browser_close_killia_tab_001",
+    "app": "Browser",
+    "goal": "Close the 'Killia' tab",
+    "rubric": "The browser's tab bar no longer shows a tab with the GitHub icon and the title containing 'Killia'.",
+    "target_bbox": [
+      1542,
+      9,
+      127,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1500.png"
+  },
+  {
+    "id": "browser-focus-omnibox-001",
+    "app": "Browser",
+    "goal": "Click the address bar to focus it",
+    "rubric": "Success if the browser\u2019s address bar shows a blinking text cursor and any placeholder text is replaced by an editable caret state indicating focus.",
+    "target_bbox": [
+      823,
+      138,
+      205,
+      31
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_847.png"
+  },
+  {
+    "id": "settings-uncheck-001",
+    "app": "Settings",
+    "goal": "Uncheck this setting's checkbox.",
+    "rubric": "Pass if the targeted checkbox appears empty with no checkmark visible.",
+    "target_bbox": [
+      675,
+      874,
+      17,
+      17
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_2397.png"
+  },
+  {
+    "id": "browser-close-consent-tab-001",
+    "app": "Browser",
+    "goal": "Close the 'Formulaire de Consentement' tab",
+    "rubric": "The browser tab labeled 'Formulaire de Consentement' is no longer present in the tab bar; no tab with that title is visible.",
+    "target_bbox": [
+      117,
+      9,
+      310,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_714.png"
+  },
+  {
+    "id": "btn-show-results",
+    "app": "Browser",
+    "goal": "Click the 'Show Results' button.",
+    "rubric": "Pass if the interface updates to display a results view: a section or page with a visible heading or label containing the word 'Results' is shown, and the orange 'Show Results' button is no longer visible on the screen.",
+    "target_bbox": [
+      945,
+      826,
+      253,
+      51
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_3707.png"
+  },
+  {
+    "id": "task-HumanAIGC-link-001",
+    "app": "Browser",
+    "goal": "Open the 'HumanAIGC' link.",
+    "rubric": "Pass if the browser navigates to a new page where the main heading or the active tab title contains the text 'HumanAIGC'.",
+    "target_bbox": [
+      1387,
+      501,
+      95,
+      25
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1280.png"
+  },
+  {
+    "id": "task-precautions-001",
+    "app": "Settings",
+    "goal": "Open the Precautions section",
+    "rubric": "Success if the Settings window shows the Precautions page with a visible header or title reading 'Precautions' in the main content area.",
+    "target_bbox": [
+      5,
+      422,
+      299,
+      83
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_2911.png"
+  },
+  {
+    "id": "pagination-page-9-browser",
+    "app": "Browser",
+    "goal": "Click the page number 9 in the pagination bar",
+    "rubric": "The pagination control shows 9 as the active/selected page (visually highlighted), and the content updates to reflect page 9",
+    "target_bbox": [
+      929,
+      952,
+      56,
+      50
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_614.png"
+  },
+  {
+    "id": "close-thankyou-tab",
+    "app": "Browser",
+    "goal": "Close the 'Thank You' tab",
+    "rubric": "The browser tab labeled 'Thank You' is no longer visible in the tab strip after the action.",
+    "target_bbox": [
+      289,
+      9,
+      183,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_76.png"
+  },
+  {
+    "id": "task-001",
+    "app": "Browser",
+    "goal": "Open the cdpn.io/tutsplus/fullpage/KVmpXo link",
+    "rubric": "Success if the browser navigates so the address bar URL contains 'cdpn.io/tutsplus/fullpage/KVmpXo' (with the anon=true query) on the loaded page.",
+    "target_bbox": [
+      181,
+      47,
+      1138,
+      33
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_3092.png"
+  },
+  {
+    "id": "browser-uncheck-checkbox-1",
+    "app": "Browser",
+    "goal": "Uncheck the red checkbox",
+    "rubric": "Success if the checkbox appears empty with no white check mark and no red fill.",
+    "target_bbox": [
+      264,
+      344,
+      21,
+      21
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_3285.png"
+  },
+  {
+    "id": "dd-arrow-1",
+    "app": "Browser",
+    "goal": "Open the dropdown menu by clicking the down arrow.",
+    "rubric": "Success if, after the click, a dropdown panel appears directly beneath the arrow showing a list of options (and/or the arrow flips upward). Before the click, no such panel is visible.",
+    "target_bbox": [
+      415,
+      207,
+      21,
+      40
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1148.png"
+  },
+  {
+    "id": "task-close-leon-tab-001",
+    "app": "Browser",
+    "goal": "Close the 'Leon -' browser tab.",
+    "rubric": "The browser tab titled 'Leon -' disappears from the tab bar; no tab with that title remains visible.",
+    "target_bbox": [
+      662,
+      9,
+      137,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1378.png"
+  },
+  {
+    "id": "task-radio-select-001",
+    "app": "Settings",
+    "goal": "Select this radio button",
+    "rubric": "Success if the radio button at this location appears filled with a dot, indicating it is selected.",
+    "target_bbox": [
+      1262,
+      720,
+      25,
+      26
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_455.png"
+  },
+  {
+    "id": "tab-close-demande-preparation",
+    "app": "Browser",
+    "goal": "Close the tab titled \u201cDemande de visite de pr\u00e9paration\u201d.",
+    "rubric": "Success if the browser\u2019s tab bar no longer shows any tab whose title begins with \u201cDemande de visite de pr\u00e9par\u2026\u201d. The specific tab is not visible anywhere among the open tabs.",
+    "target_bbox": [
+      117,
+      9,
+      310,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1031.png"
+  },
+  {
+    "id": "browser-select-url-01",
+    "app": "Browser",
+    "goal": "Click the address bar to highlight the URL",
+    "rubric": "Pass if the browser's address bar is focused and the entire URL text appears selected/highlighted in the bar.",
+    "target_bbox": [
+      190,
+      56,
+      1287,
+      33
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_140.png"
+  },
+  {
+    "id": "task-lang-dropdown-fr-001",
+    "app": "Browser",
+    "goal": "Open the language dropdown by clicking the \u201cfran\u00e7ais\u201d selector",
+    "rubric": "Success if a dropdown menu of language options is visible anchored to the \u201cfran\u00e7ais\u201d field (e.g., a list of languages appears and/or the caret flips up). Fail if no menu appears or a different panel opens.",
+    "target_bbox": [
+      1187,
+      200,
+      310,
+      40
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_674.png"
+  },
+  {
+    "id": "desktop-deselect-1",
+    "app": "Desktop",
+    "goal": "Click an empty area of the desktop to deselect all items.",
+    "rubric": "Success if, in the resulting screenshot, no desktop icons appear selected or highlighted and no context menu is visible.",
+    "target_bbox": [
+      789,
+      927,
+      3,
+      2
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_31.png"
+  },
+  {
+    "id": "browse-category-livres-bd-revues",
+    "app": "Browser",
+    "goal": "Click the 'Livres, BD, revues' category tile.",
+    "rubric": "Success if the browser navigates to a page where the main heading or breadcrumb visibly contains the exact text 'Livres, BD, revues'.",
+    "target_bbox": [
+      526,
+      648,
+      187,
+      238
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1650.png"
+  },
+  {
+    "id": "close-coronavirus-tab-001",
+    "app": "Browser",
+    "goal": "Close the 'Coronavirus Intake form' tab",
+    "rubric": "The browser tab with the title starting 'Coronavirus Intake form' is no longer present in the tab bar.",
+    "target_bbox": [
+      1014,
+      9,
+      310,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1190.png"
+  },
+  {
+    "id": "task-ef8a1c67",
+    "app": "Desktop",
+    "goal": "Click the green E app icon on the dock to open it",
+    "rubric": "Success if, after the click, the green E icon shows an active indicator (e.g., an underline/dot/highlight) on the dock/taskbar and a new application window is visible in the foreground.",
+    "target_bbox": [
+      29,
+      171,
+      40,
+      40
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1473.png"
+  },
+  {
+    "id": "checkbox-uncheck-browser",
+    "app": "Browser",
+    "goal": "Uncheck the highlighted checkbox",
+    "rubric": "The checkbox at the indicated location shows an empty square with no white checkmark or blue fill.",
+    "target_bbox": [
+      245,
+      167,
+      31,
+      30
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_2342.png"
+  },
+  {
+    "id": "task-new-event-fr-001",
+    "app": "Browser",
+    "goal": "Click \"Nouvel \u00e9v\u00e9nement\" to start creating a new calendar event.",
+    "rubric": "Pass if an event creation interface opens, showing fields to enter event details (e.g., title and date/time) in a panel or dialog. Fail if the calendar view remains unchanged or only a dropdown menu is shown.",
+    "target_bbox": [
+      85,
+      202,
+      247,
+      50
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_6.png"
+  },
+  {
+    "id": "office_highlight_toggle",
+    "app": "Office",
+    "goal": "Activate the Highlight tool",
+    "rubric": "The highlight pen icon in the toolbar appears in a pressed/selected state indicating the highlighter is active.",
+    "target_bbox": [
+      330,
+      161,
+      30,
+      30
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1001.png"
+  },
+  {
+    "id": "open-netflix-listing",
+    "app": "Browser",
+    "goal": "Open the Netflix app details by clicking its result.",
+    "rubric": "Success if the view changes from a results list to a single Netflix details page where the header/title reads 'Netflix' and only that app\u2019s information is shown (not a list of multiple apps).",
+    "target_bbox": [
+      145,
+      876,
+      526,
+      95
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1530.png"
+  },
+  {
+    "id": "browser-focus-address-bar-001",
+    "app": "Browser",
+    "goal": "Click the address bar to focus it",
+    "rubric": "Success if the browser\u2019s address bar shows a visible text caret inside it, indicating focus (no other field has a caret).",
+    "target_bbox": [
+      751,
+      654,
+      195,
+      31
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_419.png"
+  },
+  {
+    "id": "task-corbeille-001",
+    "app": "Files",
+    "goal": "Open the Corbeille (Recycle Bin) by clicking its entry in the sidebar",
+    "rubric": "Success if the file view shows the Recycle Bin and the UI indicates Corbeille is open (e.g., breadcrumb or title includes 'Corbeille' and/or the Corbeille item in the sidebar is highlighted).",
+    "target_bbox": [
+      14,
+      684,
+      290,
+      35
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_784.png"
+  },
+  {
+    "id": "t-blank-deselect-01",
+    "app": "Browser",
+    "goal": "Click the blank page area to clear any text selection.",
+    "rubric": "Pass if, after the click, no text on the webpage is highlighted and the page content area is focused rather than the address bar.",
+    "target_bbox": [
+      815,
+      410,
+      17,
+      17
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_3180.png"
+  },
+  {
+    "id": "task-6f9b8a4e-wworkweek",
+    "app": "Office",
+    "goal": "Switch to the Work Week view by clicking \u201cSemaine de travail\u201d.",
+    "rubric": "Success if the \u201cSemaine de travail\u201d control appears selected/highlighted and the calendar displays only Monday\u2013Friday columns (no Saturday/Sunday).",
+    "target_bbox": [
+      435,
+      207,
+      199,
+      40
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_6.png"
+  },
+  {
+    "id": "helpline-nav-open",
+    "app": "Browser",
+    "goal": "Click the Helpline link in the site\u2019s top navigation.",
+    "rubric": "The resulting page shows the main content with a visible heading or title containing the word \u201cHelpline,\u201d or the Helpline navigation tab appears selected/active in the header.",
+    "target_bbox": [
+      95,
+      710,
+      119,
+      62
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_2911.png"
+  },
+  {
+    "id": "desktop-calendar-select-26",
+    "app": "Desktop",
+    "goal": "Select the 26th day in the calendar.",
+    "rubric": "Success if the calendar shows day 26 as the selected date (its cell is highlighted/filled) and any selected-date indicator or header reflects the 26th.",
+    "target_bbox": [
+      268,
+      453,
+      31,
+      31
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1148.png"
+  },
+  {
+    "id": "files-search-focus-01",
+    "app": "Files",
+    "goal": "Click the search box to focus the query 'checklist'.",
+    "rubric": "The search box displays a visible text caret inside it (at or after the word 'checklist') and shows focused styling; the text 'checklist' remains present.",
+    "target_bbox": [
+      1020,
+      9,
+      118,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1548.png"
+  },
+  {
+    "id": "browser_close_frichti_tab",
+    "app": "Browser",
+    "goal": "Close the 'Frichti' browser tab.",
+    "rubric": "Success if the tab labeled 'Frichti' (with its favicon) is no longer visible in the browser's tab bar after the action.",
+    "target_bbox": [
+      1387,
+      9,
+      147,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1650.png"
+  },
+  {
+    "id": "select-row-27",
+    "app": "Office",
+    "goal": "Click the row header 27 to select the entire row",
+    "rubric": "Success if row 27 is selected: the header cell labeled 27 is highlighted and the entire 27th row shows the selection highlight across all columns.",
+    "target_bbox": [
+      802,
+      668,
+      57,
+      51
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_781.png"
+  },
+  {
+    "id": "browser-close-nouvel-tab",
+    "app": "Browser",
+    "goal": "Close the 'Nouvel onglet' tab by clicking its X.",
+    "rubric": "The tab labeled with text starting with 'Nouvel' is no longer present on the tab bar after the click.",
+    "target_bbox": [
+      1522,
+      9,
+      147,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1650.png"
+  },
+  {
+    "id": "task-autosum-dropdown",
+    "app": "Office",
+    "goal": "Open the AutoSum dropdown",
+    "rubric": "A dropdown menu appears anchored to the \u2211 toolbar button, showing function options beneath it.",
+    "target_bbox": [
+      1375,
+      111,
+      50,
+      30
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1001.png"
+  },
+  {
+    "id": "close-binarie-tab",
+    "app": "Browser",
+    "goal": "Click the close (X) on the 'Binarie' tab.",
+    "rubric": "The browser tab titled 'Binarie' is no longer visible in the tab bar after the click.",
+    "target_bbox": [
+      537,
+      9,
+      137,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1378.png"
+  },
+  {
+    "id": "task-8b7c",
+    "app": "Settings",
+    "goal": "Check the checkbox",
+    "rubric": "Success if the checkbox shows a checkmark inside the square (checked state) in the resulting screenshot.",
+    "target_bbox": [
+      264,
+      214,
+      21,
+      21
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_3367.png"
+  },
+  {
+    "id": "task-addrbar-focus-001",
+    "app": "Browser",
+    "goal": "Click the address/search bar to focus it for typing",
+    "rubric": "Success if the address/search field is focused, evidenced by a visible text caret inside the field or its contents being highlighted/selected in the bar.",
+    "target_bbox": [
+      751,
+      520,
+      397,
+      31
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_419.png"
+  },
+  {
+    "id": "checkbox-check-01",
+    "app": "Browser",
+    "goal": "Check the checkbox.",
+    "rubric": "Success if the checkbox at the target location shows a visible checkmark inside it in the final screenshot; failure if it remains empty.",
+    "target_bbox": [
+      264,
+      900,
+      21,
+      21
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_3375.png"
+  },
+  {
+    "id": "click-page-number-box",
+    "app": "Browser",
+    "goal": "Click the page number field to focus it",
+    "rubric": "Success if the small single-line input showing the number 5 is focused with a visible text caret inside the field.",
+    "target_bbox": [
+      783,
+      644,
+      396,
+      31
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_340.png"
+  },
+  {
+    "id": "click-blue-tab-001",
+    "app": "Browser",
+    "goal": "Activate the blue browser tab at the far left of the tab bar",
+    "rubric": "Success if the leftmost tab in the browser tab bar is visibly active (highlighted/blue) and its page content is shown in the main viewport, with any other tabs appearing inactive.",
+    "target_bbox": [
+      617,
+      120,
+      18,
+      17
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_3078.png"
+  },
+  {
+    "id": "browser-jotform-logo-home",
+    "app": "Browser",
+    "goal": "Click the Jotform logo to open the site homepage.",
+    "rubric": "Pass if the browser navigates to the Jotform root URL (jotform.com/) and the homepage header with the Jotform logo is visible.",
+    "target_bbox": [
+      26,
+      974,
+      166,
+      55
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_444.png"
+  },
+  {
+    "id": "browser-refresh-point-de-s-001",
+    "app": "Browser",
+    "goal": "Click the circular refresh icon next to \u201cPoint de s\u201d.",
+    "rubric": "Success if the circular arrow shows an active/spinning state or the adjacent timestamp no longer reads \u201c9:40\u201d.",
+    "target_bbox": [
+      675,
+      561,
+      132,
+      28
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1148.png"
+  },
+  {
+    "id": "task-7f1c8a76-bb4e-4c2b-a9a4-7e0c7b8e4a2d",
+    "app": "Browser",
+    "goal": "Click the address bar to focus it.",
+    "rubric": "Pass if the browser\u2019s URL/search field is in focus\u2014its text is highlighted or a text caret is visible inside the field.",
+    "target_bbox": [
+      769,
+      596,
+      225,
+      33
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_106.png"
+  },
+  {
+    "id": "task-9e1a6f6b-9f2c-4a3a-9574-6a6b3c2f3c1a",
+    "app": "Browser",
+    "goal": "Click the back-to-top arrow to scroll to the top of the page.",
+    "rubric": "Success if the page is scrolled to the very top: the vertical scrollbar thumb is at the top edge and the page header/top navigation is visible.",
+    "target_bbox": [
+      740,
+      780,
+      51,
+      29
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_614.png"
+  },
+  {
+    "id": "tshirt-signup-link-001",
+    "app": "Browser",
+    "goal": "Click the \u201cT\u2011Shirt Sign Up\u201d link.",
+    "rubric": "Success if the browser shows the T\u2011Shirt Sign Up section or page, with a visible heading reading \u201cT\u2011Shirt Sign Up\u201d at the top of the content area.",
+    "target_bbox": [
+      508,
+      282,
+      902,
+      60
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1353.png"
+  },
+  {
+    "id": "task-desktop-contextmenu-001",
+    "app": "Desktop",
+    "goal": "Right-click the desktop background to open its context menu",
+    "rubric": "Pass if a desktop context menu is visible on the background with entries like 'View', 'Sort by', and 'Refresh'. Fail if no menu is open or if a non-desktop menu is shown.",
+    "target_bbox": [
+      520,
+      496,
+      2,
+      2
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_211.png"
+  },
+  {
+    "id": "close-modal-x-001",
+    "app": "Browser",
+    "goal": "Close the on\u2011page dialog by clicking its X button",
+    "rubric": "Success when the modal/popup is no longer visible and the X button is gone; the underlying page content is fully visible with no overlay dimming.",
+    "target_bbox": [
+      366,
+      867,
+      214,
+      43
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1532.png"
+  },
+  {
+    "id": "task-radio-select-001",
+    "app": "Settings",
+    "goal": "Select the Manual radio button",
+    "rubric": "Success if the targeted radio button shows a filled inner dot indicating it is selected.",
+    "target_bbox": [
+      70,
+      458,
+      25,
+      25
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_736.png"
+  },
+  {
+    "id": "a8b2d7a4-3c3e-4f3e-8d5a-7a9b9d0d5e12",
+    "app": "Browser",
+    "goal": "Open the iTunes app page by clicking its title.",
+    "rubric": "Pass if the browser shows a dedicated iTunes detail page with the title 'iTunes' at the top (and an Install/Get-type button), and the multi-item results list is no longer visible.",
+    "target_bbox": [
+      687,
+      876,
+      526,
+      95
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1530.png"
+  },
+  {
+    "id": "browser-open-jotform-2030451928884558",
+    "app": "Browser",
+    "goal": "Click the 'form.jotform.com' link to open it.",
+    "rubric": "Pass if the browser loads a page where the address bar contains 'form.jotform.com/2030451928884558' and the query includes 'preview=true'.",
+    "target_bbox": [
+      190,
+      56,
+      1287,
+      33
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_306.png"
+  },
+  {
+    "id": "task-8c1f",
+    "app": "Browser",
+    "goal": "Uncheck the checkbox",
+    "rubric": "Success if the targeted checkbox appears empty with no checkmark inside it.",
+    "target_bbox": [
+      35,
+      338,
+      30,
+      31
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_4021.png"
+  },
+  {
+    "id": "addrbar-focus-001",
+    "app": "Browser",
+    "goal": "Click the address bar to focus it.",
+    "rubric": "Success if the address bar is focused, evidenced by a visible text caret inside it or the current URL text being highlighted for editing.",
+    "target_bbox": [
+      539,
+      764,
+      232,
+      38
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_818.png"
+  },
+  {
+    "id": "settings-check-auto-update-001",
+    "app": "Settings",
+    "goal": "Enable the 'Auto-update' checkbox",
+    "rubric": "Success when the targeted checkbox at the given coordinates is visibly checked (contains a checkmark/filled) rather than empty.",
+    "target_bbox": [
+      264,
+      969,
+      21,
+      21
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_3439.png"
+  },
+  {
+    "id": "browser-card-buttons-nav-01",
+    "app": "Browser",
+    "goal": "Open the Card buttons section by clicking its sidebar entry.",
+    "rubric": "Success if the main content shows a heading 'Card buttons' and the corresponding sidebar item appears selected/highlighted.",
+    "target_bbox": [
+      366,
+      576,
+      214,
+      43
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1532.png"
+  },
+  {
+    "id": "browser_profile_menu_ms",
+    "app": "Browser",
+    "goal": "Open the profile menu by clicking the MS avatar.",
+    "rubric": "Success if a dropdown/popup panel anchored to the avatar is visible showing account/profile options (e.g., profile name, manage/sign-in buttons) near the top-right.",
+    "target_bbox": [
+      277,
+      301,
+      63,
+      35
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_950.png"
+  },
+  {
+    "id": "task-buy-nykaa-link-001",
+    "app": "Browser",
+    "goal": "Click the 'Buy on Nykaa' link.",
+    "rubric": "Success if the browser loads a page where the address bar contains 'nykaa.com'.",
+    "target_bbox": [
+      1421,
+      773,
+      124,
+      24
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_3081.png"
+  },
+  {
+    "id": "tab-enquete-select-001",
+    "app": "Browser",
+    "goal": "Switch to the \u201cEnqu\u00eate de \u2026\u201d tab.",
+    "rubric": "The browser shows the tab titled \u201cEnqu\u00eate de \u2026\u201d as the active/foreground tab in the tab bar (highlighted compared to others) and its page is displayed.",
+    "target_bbox": [
+      1316,
+      9,
+      183,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1036.png"
+  },
+  {
+    "id": "browser-filtre-open-001",
+    "app": "Browser",
+    "goal": "Click the \"Filtre\" button to open the filter menu.",
+    "rubric": "Success if a filter dropdown/panel appears anchored to the \"Filtre\" button (typically below it) showing filter options, or the button indicates an expanded state (e.g., arrow points up).",
+    "target_bbox": [
+      1050,
+      207,
+      113,
+      40
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_6.png"
+  },
+  {
+    "id": "task-activate-formulaire-tab-001",
+    "app": "Browser",
+    "goal": "Activate the \u201cFormulaire d\u2026\u201d tab",
+    "rubric": "The \u201cFormulaire d\u2026\u201d tab is highlighted as the active tab, and its page content is visible in the browser window.",
+    "target_bbox": [
+      460,
+      9,
+      183,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_647.png"
+  },
+  {
+    "id": "task-9b7a-searchbox-focus",
+    "app": "Browser",
+    "goal": "Click the page\u2019s search box to focus it.",
+    "rubric": "Pass if the search input shows focus (visible focus ring) with a text caret inside the field, indicating it is ready for typing.",
+    "target_bbox": [
+      965,
+      417,
+      59,
+      32
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_405.png"
+  },
+  {
+    "id": "browser-open-orange-color-menu",
+    "app": "Browser",
+    "goal": "Click the orange color dropdown to open its menu.",
+    "rubric": "Success if a dropdown/popup menu appears anchored to the orange square with the white arrow next to the 'Orange' label. The menu should be visibly expanded with selectable options. Fail if no menu is shown.",
+    "target_bbox": [
+      121,
+      162,
+      107,
+      50
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1946.png"
+  },
+  {
+    "id": "settings-uncheck-checkbox-01",
+    "app": "Settings",
+    "goal": "Uncheck the option by clicking the checked checkbox.",
+    "rubric": "Success if the checkbox at this location is an empty square with no checkmark visible, indicating the option is disabled.",
+    "target_bbox": [
+      507,
+      305,
+      51,
+      51
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_3569.png"
+  },
+  {
+    "id": "task_searchbox_click_001",
+    "app": "Browser",
+    "goal": "Click the search box to focus it.",
+    "rubric": "Success if the search box shows a text insertion caret inside it, indicating the field is focused.",
+    "target_bbox": [
+      756,
+      862,
+      60,
+      32
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_401.png"
+  },
+  {
+    "id": "rb-select-001",
+    "app": "Browser",
+    "goal": "Select this radio button option",
+    "rubric": "Pass if the radio button at the indicated location displays a filled dot inside the circle in the final screenshot.",
+    "target_bbox": [
+      1262,
+      920,
+      25,
+      26
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_455.png"
+  },
+  {
+    "id": "b-1372",
+    "app": "Browser",
+    "goal": "Close the \u201cFormulaire de demande de pr\u00eat\u201d tab.",
+    "rubric": "In the browser\u2019s tab bar, the tab titled \u201cFormulaire de demande de pr\u00eat\u201d is no longer visible and the number of tabs decreases by one. Another tab becomes active.",
+    "target_bbox": [
+      117,
+      9,
+      310,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_345.png"
+  },
+  {
+    "id": "msstore-open-scanneur",
+    "app": "Desktop",
+    "goal": "Open the Scanneur Windows app page by clicking its title.",
+    "rubric": "Success if the Microsoft Store shows the single product page with the header text \"Scanneur Windows\" (not a list view).",
+    "target_bbox": [
+      687,
+      718,
+      526,
+      142
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1530.png"
+  },
+  {
+    "id": "files-clear-search-x-001",
+    "app": "Files",
+    "goal": "Click the X to clear the search field.",
+    "rubric": "Success if the search box is empty (the text 'checklist' is gone) and the clear X icon is no longer visible in the field.",
+    "target_bbox": [
+      980,
+      9,
+      148,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1283.png"
+  },
+  {
+    "id": "browser-close-tab-demande-visite",
+    "app": "Browser",
+    "goal": "Close the tab titled \u201cDemande de visite de pr\u00e9paration\u201d.",
+    "rubric": "Pass if the tab with the title text \u201cDemande de visite de pr\u00e9paration\u201d is no longer present in the browser\u2019s tab bar after the click.",
+    "target_bbox": [
+      117,
+      9,
+      310,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_920.png"
+  },
+  {
+    "id": "close-candidature-tab",
+    "app": "Browser",
+    "goal": "Close the \u201cCandidature\u201d tab.",
+    "rubric": "In the tab bar, there is no tab whose title contains the text \u201cCandidature\u201d. The previously adjacent tab is shown as active, and the closed tab (with its X button) is not visible.",
+    "target_bbox": [
+      802,
+      9,
+      183,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_86.png"
+  },
+  {
+    "id": "cal-13-select",
+    "app": "Browser",
+    "goal": "Select the day 13 in the date picker.",
+    "rubric": "Success when the calendar widget shows the cell labeled 13 as selected (distinct highlight/active state). If a linked date field is visible, it reflects a date with day 13.",
+    "target_bbox": [
+      198,
+      418,
+      31,
+      31
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_6.png"
+  },
+  {
+    "id": "task-9f3c1a2e-desktop-test-icon",
+    "app": "Desktop",
+    "goal": "Click the 'Test' desktop icon",
+    "rubric": "The desktop shows the 'Test' icon highlighted/selected (its label has a selection background), and no other desktop icon is selected.",
+    "target_bbox": [
+      95,
+      514,
+      80,
+      63
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_2911.png"
+  },
+  {
+    "id": "close-tab-comr",
+    "app": "Browser",
+    "goal": "Close the 'comr' tab by clicking its X button.",
+    "rubric": "Success if the tab titled 'comr' disappears from the tab bar and there is one fewer tab visible.",
+    "target_bbox": [
+      162,
+      9,
+      127,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1500.png"
+  },
+  {
+    "id": "next-carousel-arrow-01",
+    "app": "Browser",
+    "goal": "Go to the next slide in the page\u2019s image carousel.",
+    "rubric": "The carousel displays a different slide; if pagination is shown, the index increases (e.g., 1/5 to 2/5) or the next pagination dot becomes highlighted.",
+    "target_bbox": [
+      1331,
+      427,
+      71,
+      70
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1859.png"
+  },
+  {
+    "id": "browser-open-google-forms-link",
+    "app": "Browser",
+    "goal": "Click the Google Forms link to open it",
+    "rubric": "Success if the active browser tab shows a page whose address bar contains 'docs.google.com/forms' and includes '/edit'.",
+    "target_bbox": [
+      190,
+      56,
+      1243,
+      33
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1353.png"
+  },
+  {
+    "id": "office-attach-clip-001",
+    "app": "Office",
+    "goal": "Click the paperclip to attach a file.",
+    "rubric": "Pass if an attachment interface is visible: either a file chooser dialog (e.g., titled 'Open' or 'Attach File') is in the foreground or an attachment options menu is expanded near the paperclip icon.",
+    "target_bbox": [
+      14,
+      333,
+      50,
+      51
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1148.png"
+  },
+  {
+    "id": "open-jotform-link-1",
+    "app": "Browser",
+    "goal": "Click the Jotform link to open it.",
+    "rubric": "Success if the browser navigates to the Jotform page and the address bar shows a URL on the form.jotform.com domain, beginning with https://form.jotform.com/220542278840354.",
+    "target_bbox": [
+      190,
+      56,
+      1287,
+      33
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_579.png"
+  },
+  {
+    "id": "office-place-caret",
+    "app": "Office",
+    "goal": "Click the blank page area to place the text cursor",
+    "rubric": "Pass if the screenshot shows the blinking insertion caret within the white document page area and no UI dialog or menu is open.",
+    "target_bbox": [
+      520,
+      243,
+      2,
+      2
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1149.png"
+  },
+  {
+    "id": "browser-focus-address-bar-001",
+    "app": "Browser",
+    "goal": "Click the address bar to focus it.",
+    "rubric": "Success if the address/URL field is focused with its contents selected (highlighted) or a visible text cursor inside the field, indicating it is ready for typing.",
+    "target_bbox": [
+      687,
+      417,
+      59,
+      32
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_405.png"
+  },
+  {
+    "id": "task-checked-checkbox-001",
+    "app": "Settings",
+    "goal": "Check the checkbox",
+    "rubric": "Success if the checkbox that was empty now displays a checkmark inside the square, indicating it is selected.",
+    "target_bbox": [
+      35,
+      848,
+      30,
+      31
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_4021.png"
+  },
+  {
+    "id": "open-apps-overview-001",
+    "app": "Desktop",
+    "goal": "Open the Applications overview",
+    "rubric": "Success if the Applications view is displayed, showing a grid of app icons (and search field) instead of the desktop or an app window.",
+    "target_bbox": [
+      1421,
+      909,
+      56,
+      55
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_288.png"
+  },
+  {
+    "id": "open-browser-menu-hamburger",
+    "app": "Browser",
+    "goal": "Open the browser menu",
+    "rubric": "Pass if a dropdown or panel originating from the hamburger icon (three horizontal lines) is visible in the browser window, showing multiple menu items. Fail if no such menu is open.",
+    "target_bbox": [
+      514,
+      121,
+      30,
+      30
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1001.png"
+  },
+  {
+    "id": "task-date-25",
+    "app": "Desktop",
+    "goal": "Select the date 25 in the calendar widget.",
+    "rubric": "The desktop calendar is visible and the day cell labeled 25 appears selected (e.g., highlighted or outlined) in the calendar grid, with no other date highlighted as the active selection.",
+    "target_bbox": [
+      691,
+      668,
+      57,
+      51
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_781.png"
+  },
+  {
+    "id": "desktop-click-yes",
+    "app": "Desktop",
+    "goal": "Click the Yes button to confirm",
+    "rubric": "Pass if the confirmation dialog is dismissed and the Yes button is no longer visible on the screen.",
+    "target_bbox": [
+      526,
+      461,
+      232,
+      50
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_2768.png"
+  },
+  {
+    "id": "open-myntra-link",
+    "app": "Browser",
+    "goal": "Click the \"Buy on Myntra\" link",
+    "rubric": "Success when the active browser tab displays a page whose address bar contains \"myntra.com\" or the tab title includes \"Myntra\".",
+    "target_bbox": [
+      651,
+      713,
+      133,
+      24
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_3081.png"
+  },
+  {
+    "id": "f7a7b6a0-5b5a-4d1e-9a4f-0a7f8d6c5a31",
+    "app": "Browser",
+    "goal": "Click the right scrollbar track to scroll the page down.",
+    "rubric": "After the click, the page content is lower than before and the vertical scrollbar thumb is positioned further down the track.",
+    "target_bbox": [
+      366,
+      932,
+      214,
+      44
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1532.png"
+  },
+  {
+    "id": "b2a6de0e-44a4-4fd8-9a4d-2b6a7a2ce2c1",
+    "app": "Browser",
+    "goal": "Close the \u201cFormulaire type \u00e9tat des lieux\u201d tab.",
+    "rubric": "The tab titled \u201cFormulaire type \u00e9tat des lieux\u201d is no longer visible in the browser\u2019s tab bar after the click.",
+    "target_bbox": [
+      416,
+      9,
+      310,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_579.png"
+  },
+  {
+    "id": "close-pep-v2-tab",
+    "app": "Browser",
+    "goal": "Close the 'PEP V2 - 03/2021 - HORS IDF - SF' tab.",
+    "rubric": "After completion, the tab titled 'PEP V2 - 03/2021 - HORS IDF - SF' is no longer visible in the browser's tab bar; focus shifts to another tab or a new tab page.",
+    "target_bbox": [
+      715,
+      9,
+      310,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_812.png"
+  },
+  {
+    "id": "open-cdpn-link-001",
+    "app": "Browser",
+    "goal": "Open the cdpn.io link.",
+    "rubric": "Success if the browser navigates and the address bar begins with 'https://cdpn.io/tutsplus/fullpage/bGmjqOg'.",
+    "target_bbox": [
+      181,
+      47,
+      1138,
+      33
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1789.png"
+  },
+  {
+    "id": "browser-pagination-8",
+    "app": "Browser",
+    "goal": "Click the pagination number 8 to open page 8",
+    "rubric": "The pagination control shows 8 as the active/current page (8 is highlighted) and the previously active number is no longer highlighted.",
+    "target_bbox": [
+      873,
+      952,
+      57,
+      50
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_614.png"
+  },
+  {
+    "id": "press-c-key-osk",
+    "app": "Desktop",
+    "goal": "Press the C key on the on-screen keyboard",
+    "rubric": "The focused text field shows the character 'c' or 'C' inserted at the caret position (typically appearing at the end if the cursor was at the end).",
+    "target_bbox": [
+      14,
+      483,
+      77,
+      43
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_950.png"
+  },
+  {
+    "id": "click_search_box_0001",
+    "app": "Browser",
+    "goal": "Click the search box to focus it.",
+    "rubric": "Success when the search input field is focused and shows a text insertion caret inside it.",
+    "target_bbox": [
+      663,
+      431,
+      119,
+      32
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_67.png"
+  },
+  {
+    "id": "addrbar-select-jotform-001",
+    "app": "Browser",
+    "goal": "Select the URL in the address bar",
+    "rubric": "Success if the browser's address bar is focused and the entire URL appears highlighted/selected in the bar in the resulting screenshot.",
+    "target_bbox": [
+      190,
+      56,
+      1287,
+      33
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_247.png"
+  },
+  {
+    "id": "desktop_context_menu_bg_001",
+    "app": "Desktop",
+    "goal": "Right-click the desktop background to open the context menu.",
+    "rubric": "Successful if a desktop context menu is visible on the wallpaper (a small menu with options such as View/Sort/Personalize/Display settings). Unsuccessful if no context menu is shown.",
+    "target_bbox": [
+      1440,
+      503,
+      2,
+      2
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1500.png"
+  },
+  {
+    "id": "task-afficher-view-tab",
+    "app": "Files",
+    "goal": "Click the \u201cAfficher\u201d (View) tab",
+    "rubric": "The File Explorer ribbon switches to the View/Afficher tab: the \u201cAfficher\u201d label appears selected/underlined and view-related controls (e.g., layout, sort, preview/navigation pane options) are visible.",
+    "target_bbox": [
+      228,
+      157,
+      98,
+      39
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_6.png"
+  },
+  {
+    "id": "open-more-menu-001",
+    "app": "Browser",
+    "goal": "Click the three-dots button to open the More options menu.",
+    "rubric": "Pass if a dropdown/popup menu becomes visible adjacent to the three-dots button, showing a vertical list of actions (e.g., options or tools). Fail if no menu is visible.",
+    "target_bbox": [
+      274,
+      763,
+      36,
+      35
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_6.png"
+  },
+  {
+    "id": "searchbox-focus-1",
+    "app": "Browser",
+    "goal": "Click the search box to focus it",
+    "rubric": "Success if the white input field is focused with a visible text cursor inside it.",
+    "target_bbox": [
+      826,
+      862,
+      59,
+      32
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_401.png"
+  },
+  {
+    "id": "task-buy-on-myntra-link-001",
+    "app": "Browser",
+    "goal": "Click the \u201cBuy on Myntra\u201d link.",
+    "rubric": "Success if the browser navigates to a page where the address bar contains \u201cmyntra\u201d.",
+    "target_bbox": [
+      1417,
+      713,
+      133,
+      24
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_3081.png"
+  },
+  {
+    "id": "tab-close-white-simple-1",
+    "app": "Browser",
+    "goal": "Close the \u201cWhite Simple\u201d tab by clicking its X",
+    "rubric": "Success if the tab labeled \u201cWhite Simple\u201d is no longer visible in the browser\u2019s tab bar on the next screenshot.",
+    "target_bbox": [
+      1492,
+      9,
+      177,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1340.png"
+  },
+  {
+    "id": "t-blank-desktop-01",
+    "app": "Desktop",
+    "goal": "Click an empty area of the desktop background to clear any selection.",
+    "rubric": "Success if no desktop context menu is visible and no desktop icon appears highlighted/selected after the click.",
+    "target_bbox": [
+      537,
+      636,
+      2,
+      2
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_31.png"
+  },
+  {
+    "id": "task-next-suivant-001",
+    "app": "Browser",
+    "goal": "Click the \u201cSuivant\u201d button to proceed to the next step.",
+    "rubric": "Success if the view advances to the next step such that the current page content changes and the \u201cSuivant\u201d button is no longer present in the same location; typically a new step header or a \u201cPr\u00e9c\u00e9dent\u201d button appears.",
+    "target_bbox": [
+      638,
+      820,
+      99,
+      46
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_408.png"
+  },
+  {
+    "id": "open-ios-developer-section",
+    "app": "Browser",
+    "goal": "Expand the 'iOS Developer' dropdown",
+    "rubric": "The 'iOS Developer' header remains visible and a content panel with details appears directly beneath it, indicating the section is expanded (e.g., additional text or items are displayed).",
+    "target_bbox": [
+      675,
+      706,
+      551,
+      41
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_2385.png"
+  },
+  {
+    "id": "t-0092",
+    "app": "Browser",
+    "goal": "Close the 'Leon - Your\u2026' tab",
+    "rubric": "The browser tab whose title begins with 'Leon - Your' (with the brain favicon) is no longer visible in the tab bar after the click.",
+    "target_bbox": [
+      495,
+      9,
+      178,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1340.png"
+  },
+  {
+    "id": "browser-tab-bienvenue-switch",
+    "app": "Browser",
+    "goal": "Switch to the tab labeled \"Bienvenue\"",
+    "rubric": "The \"Bienvenue\" tab is the active tab (visually highlighted) and its page is in the foreground; the previously active tab is no longer highlighted.",
+    "target_bbox": [
+      117,
+      9,
+      183,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_647.png"
+  },
+  {
+    "id": "close-frichti-tab-x",
+    "app": "Browser",
+    "goal": "Close the \u201cFrichti -\u201d browser tab by clicking its X.",
+    "rubric": "The tab with title starting \u201cFrichti -\u201d is no longer present in the browser\u2019s tab bar.",
+    "target_bbox": [
+      1387,
+      9,
+      147,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1647.png"
+  },
+  {
+    "id": "task-001",
+    "app": "Files",
+    "goal": "Click at the end of the text in the search box labeled with 'Christ'.",
+    "rubric": "The caret is visible inside the search field immediately after the word 'Christ'.",
+    "target_bbox": [
+      539,
+      527,
+      108,
+      31
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1028.png"
+  },
+  {
+    "id": "uncheck-checkbox-001",
+    "app": "Settings",
+    "goal": "Uncheck the selected checkbox.",
+    "rubric": "Success if the checkbox at the specified location is visibly empty (no check mark) while the surrounding settings page remains otherwise unchanged.",
+    "target_bbox": [
+      688,
+      208,
+      17,
+      17
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_3092.png"
+  },
+  {
+    "id": "browser-activate-spaces-tab",
+    "app": "Browser",
+    "goal": "Activate the \u201cspaces\u201d browser tab.",
+    "rubric": "Success when the tab labeled \u201cspaces\u201d is the active tab (foreground with a lighter background connected to the address bar) and the address bar shows https://huggingface.co/spaces.",
+    "target_bbox": [
+      179,
+      28,
+      376,
+      201
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1280.png"
+  },
+  {
+    "id": "task-addrbar-focus-001",
+    "app": "Browser",
+    "goal": "Click the address bar URL to focus it.",
+    "rubric": "Success if the browser\u2019s address bar is focused with the full URL highlighted (typically blue) and/or a text caret visible in the field; the page content does not change.",
+    "target_bbox": [
+      181,
+      47,
+      1138,
+      33
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_2068.png"
+  },
+  {
+    "id": "task-date-27-select-001",
+    "app": "Browser",
+    "goal": "Select the date 27 in the calendar.",
+    "rubric": "Success if the calendar shows the day '27' visibly selected (e.g., highlighted with a distinct background) as the current chosen date in the date picker.",
+    "target_bbox": [
+      303,
+      453,
+      31,
+      31
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1148.png"
+  },
+  {
+    "id": "browser-wishlist-heart-001",
+    "app": "Browser",
+    "goal": "Click the heart icon to add this item to your wishlist",
+    "rubric": "Pass if, on the product page, the heart icon in the top-right is filled/solid instead of an outline, indicating the item is saved to the wishlist.",
+    "target_bbox": [
+      1316,
+      289,
+      329,
+      417
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_3229.png"
+  },
+  {
+    "id": "task-8a7f",
+    "app": "Office",
+    "goal": "Click inside the document page to place the text cursor.",
+    "rubric": "Success if the caret (text cursor) is visible within the white document area and the document has focus (no menus or dialogs overlapping).",
+    "target_bbox": [
+      520,
+      166,
+      2,
+      2
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1149.png"
+  },
+  {
+    "id": "close-candidature-tab",
+    "app": "Browser",
+    "goal": "Close the 'Candidature' browser tab.",
+    "rubric": "In the browser's tab bar, no tab with the title containing 'Candidature' is visible; the tab is removed from the tab strip.",
+    "target_bbox": [
+      802,
+      9,
+      183,
+      42
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_106.png"
+  },
+  {
+    "id": "browser-advertisement-open-001",
+    "app": "Browser",
+    "goal": "Click the 'Advertisement' label.",
+    "rubric": "Success when the click opens the advertisement\u2019s destination: either the current tab navigates to a new URL (address bar changes) or a new tab appears showing the ad\u2019s landing page.",
+    "target_bbox": [
+      546,
+      646,
+      744,
+      31
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_1386.png"
+  },
+  {
+    "id": "task-check-settings-checkbox-001",
+    "app": "Settings",
+    "goal": "Check this option by selecting the checkbox",
+    "rubric": "Success if the checkbox is visibly checked (a checkmark appears inside the box or the box shows the checked state) in the resulting screenshot.",
+    "target_bbox": [
+      60,
+      989,
+      17,
+      17
+    ],
+    "image_context": "data/gui_grounding/test_benchmark/images/novelis_imageqa_2240.png"
+  }
+]
