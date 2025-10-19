@@ -440,7 +440,16 @@ def evaluate_screenspot_subset_multiturn(processor, model, dataset_dir: str, lim
 
 
 def generate_multiturn_trajectory(model, processor, device, instruction: str, image_path: str, tgt_xy: Tuple[float, float], args: MTRLArgs, osworld_steps: Optional[List[dict]] = None):
-    img = Image.open(image_path).convert("RGB")
+    # Load image or create dummy if not found (e.g., MiniWob++ placeholders)
+    try:
+        img = Image.open(image_path).convert("RGB")
+    except (FileNotFoundError, OSError):
+        # Create a simple dummy image (gray with some noise for variety)
+        import numpy as np
+        w, h = 640, 480
+        arr = np.random.randint(200, 220, (h, w, 3), dtype=np.uint8)
+        img = Image.fromarray(arr, mode="RGB")
+    
     min_pixels = args.min_visual_tokens * 28 * 28
     max_pixels = args.max_visual_tokens * 28 * 28
 

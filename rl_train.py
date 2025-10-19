@@ -185,26 +185,82 @@ def build_prompt(processor, element_name: str, image_path: str, min_pixels: int,
     return text, inputs
 
 
-def parse_coord(output_text: str) -> Tuple[float, float]:
+def parse_coord(output_text: str, img_size: Tuple[int, int] = None) -> Tuple[float, float]:
+    """Parse a coordinate string into normalized [0,1] x,y.
+    Supports:
+      - [x, y] or (x, y)
+      - 'x: a, y: b'
+      - percentages like '30%, 40%'
+      - pixel values if img_size is provided
+      - 4-value bbox 'x, y, w, h' -> center normalized using img_size
+    Returns (nan, nan) if parsing fails.
+    """
+    text = (output_text or "").strip()
+    # First, try safe literal eval for simple list/tuple cases
     try:
-        xy = ast.literal_eval(output_text)
-        if isinstance(xy, (list, tuple)) and len(xy) == 2:
-            x, y = float(xy[0]), float(xy[1])
-            x = min(1.0, max(0.0, x))
-            y = min(1.0, max(0.0, y))
-            return x, y
+        xy = ast.literal_eval(text)
+        if isinstance(xy, (list, tuple)):
+            nums = [float(v) for v in xy if isinstance(v, (int, float)) or (isinstance(v, str) and re.match(r"^[-+]?[0-9]*\.?[0-9]+%?$", v.strip()))]
+            # handle percent tokens embedded in list
+            def to_num(v):
+                if isinstance(v, str) and v.strip().endswith('%'):
+                    return float(v.strip()[:-1]) / 100.0
+                return float(v)
+            nums = [to_num(v) for v in xy if isinstance(v, (int, float, str))]
+            if len(nums) >= 2:
+                if len(nums) >= 4 and img_size is not None:
+                    # treat as bbox center
+                    x, y, w, h = nums[:4]
+                    iw, ih = max(1.0, float(img_size[0])), max(1.0, float(img_size[1]))
+                    # interpret as pixels if any dimension > 1, else normalized
+                    if max(x, y, w, h) > 1.0001:
+                        cx = (x + w / 2.0) / iw
+                        cy = (y + h / 2.0) / ih
+                    else:
+                        cx = x + w / 2.0
+                        cy = y + h / 2.0
+                    return min(1.0, max(0.0, cx)), min(1.0, max(0.0, cy))
+                # 2-value
+                x, y = nums[0], nums[1]
+                if img_size is not None and (abs(x) > 1.0001 or abs(y) > 1.0001):
+                    iw, ih = max(1.0, float(img_size[0])), max(1.0, float(img_size[1]))
+                    x = x / iw
+                    y = y / ih
+                return min(1.0, max(0.0, x)), min(1.0, max(0.0, y))
     except Exception:
         pass
-    # regex fallback: extract first pair of floats
+
+    # Regex: extract up to 4 numeric tokens with optional %
     try:
-        m = re.search(r"[\[\(]?\s*([-+]?[0-9]*\.?[0-9]+)\s*,\s*([-+]?[0-9]*\.?[0-9]+)\s*[\]\)]?", output_text)
-        if m:
-            x, y = float(m.group(1)), float(m.group(2))
-            x = min(1.0, max(0.0, x))
-            y = min(1.0, max(0.0, y))
-            return x, y
+        tokens = re.findall(r"[-+]?\d*\.?\d+%?", text)
+        if len(tokens) >= 2:
+            # convert tokens
+            vals = []
+            for t in tokens[:4]:
+                if t.endswith('%'):
+                    vals.append(float(t[:-1]) / 100.0)
+                else:
+                    vals.append(float(t))
+            if len(vals) >= 4 and img_size is not None:
+                x, y, w, h = vals[:4]
+                iw, ih = max(1.0, float(img_size[0])), max(1.0, float(img_size[1]))
+                if max(x, y, w, h) > 1.0001:
+                    cx = (x + w / 2.0) / iw
+                    cy = (y + h / 2.0) / ih
+                else:
+                    cx = x + w / 2.0
+                    cy = y + h / 2.0
+                return min(1.0, max(0.0, cx)), min(1.0, max(0.0, cy))
+            # 2-value
+            x, y = vals[0], vals[1]
+            if img_size is not None and (abs(x) > 1.0001 or abs(y) > 1.0001):
+                iw, ih = max(1.0, float(img_size[0])), max(1.0, float(img_size[1]))
+                x = x / iw
+                y = y / ih
+            return min(1.0, max(0.0, x)), min(1.0, max(0.0, y))
     except Exception:
         pass
+
     return float("nan"), float("nan")
 
 
@@ -272,7 +328,7 @@ def evaluate_screenspot_subset(processor, model, dataset_dir: str, limit: int, m
             )
             gen = out[:, inputs.input_ids.shape[1]:]
             pred_str = processor.batch_decode(gen, skip_special_tokens=True, clean_up_tokenization_spaces=True)[0]
-            pred = parse_coord(pred_str)
+            pred = parse_coord(pred_str, img_size=(img_w, img_h))
             x, y, w, h = item["bbox"]
             gt = [x / img_w, y / img_h, (x + w) / img_w, (y + h) / img_h]
             ok += 1 if (not any(math.isnan(v) for v in pred)) and (gt[0] <= pred[0] <= gt[2]) and (gt[1] <= pred[1] <= gt[3]) else 0
@@ -366,8 +422,15 @@ def reinforce_step(model, processor, device, batch, args: RLArgs):
     # decode and compute rewards
     decoded = processor.batch_decode(gen_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
     rewards = []
-    for out_text, (tgt_xy, _) in zip(decoded, meta_list):
-        pred_xy = parse_coord(out_text)
+    for out_text, (tgt_xy, image_path) in zip(decoded, meta_list):
+        # read image size for robust parsing (pixel/percent support)
+        img_w, img_h = None, None
+        try:
+            with Image.open(image_path) as im:
+                img_w, img_h = im.size
+        except Exception:
+            pass
+        pred_xy = parse_coord(out_text, img_size=(img_w, img_h) if (img_w and img_h) else None)
         rewards.append(compute_reward(pred_xy, tgt_xy, args.tau_success, args.alpha_dist))
     rewards_tensor = torch.tensor(rewards, dtype=torch.float32, device=device)
 
