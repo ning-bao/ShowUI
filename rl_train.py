@@ -226,7 +226,16 @@ def load_split_items(dataset_dir: str, dataset: str, split: str) -> Tuple[str, L
         for pfile in parq_files:
             try:
                 if pd is not None:
-                    df = pd.read_parquet(pfile)
+                    try:
+                        df = pd.read_parquet(pfile, engine="pyarrow")
+                    except Exception:
+                        try:
+                            df = pd.read_parquet(pfile, engine="fastparquet")
+                        except Exception:
+                            if pq is not None:
+                                df = pq.read_table(pfile).to_pandas()
+                            else:
+                                continue
                 elif pq is not None:
                     df = pq.read_table(pfile).to_pandas()
                 else:
@@ -247,6 +256,13 @@ def load_split_items(dataset_dir: str, dataset: str, split: str) -> Tuple[str, L
                 img_val = get_val(row, [
                     "image_path", "img_path", "image", "img", "screenshot_path", "image_file", "image_url"
                 ])
+                if isinstance(img_val, dict):
+                    # HF Datasets image struct {"path": str, "bytes": optional}
+                    if "path" in img_val and img_val["path"]:
+                        img_val = img_val["path"]
+                    elif "bytes" in img_val and img_val["bytes"]:
+                        # No path to resolve; skip rows with only bytes
+                        img_val = ""
                 if isinstance(img_val, (bytes, bytearray)):
                     try:
                         img_val = img_val.decode("utf-8", errors="ignore")
