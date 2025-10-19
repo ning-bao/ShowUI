@@ -957,17 +957,14 @@ def main():
     is_osworld = ("osworld" in ds_name)
     is_mind2web = ("mind2web" in ds_name)
     is_miniwob = ("miniwob" in ds_name) or ("miniwob++" in ds_name)
-    try:
-        if is_osworld:
-            img_dir, samples = load_osworld_items(args.dataset_dir, args.train_json)
-        elif is_mind2web:
-            img_dir, samples = load_mind2web_items(args.dataset_dir, args.train_json)
-        elif is_miniwob:
-            img_dir, samples = load_miniwob_items(args.dataset_dir, args.train_json)
-        else:
-            img_dir, samples = load_split_items(args.dataset_dir, args.train_dataset, args.train_json)
-    except Exception as e:
-        print(f"Dataset load failed ({args.train_dataset}): {e}; falling back to shared grounding loader.")
+    
+    if is_osworld:
+        img_dir, samples = load_osworld_items(args.dataset_dir, args.train_json)
+    elif is_mind2web:
+        img_dir, samples = load_mind2web_items(args.dataset_dir, args.train_json)
+    elif is_miniwob:
+        img_dir, samples = load_miniwob_items(args.dataset_dir, args.train_json)
+    else:
         img_dir, samples = load_split_items(args.dataset_dir, args.train_dataset, args.train_json)
     if global_rank == 0:
         print(f"Loaded {len(samples)} samples from {args.train_dataset}/{args.train_json}")
