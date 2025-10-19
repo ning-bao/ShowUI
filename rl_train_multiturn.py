@@ -309,16 +309,16 @@ def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
             ps_raw = raw[0]["processed_states"]
             print(f"DEBUG: processed_states type: {type(ps_raw)}")
             if isinstance(ps_raw, str):
-                print(f"DEBUG: processed_states is JSON string, first 200 chars: {ps_raw[:200]}")
+                print(f"DEBUG: processed_states is string, first 200 chars: {ps_raw[:200]}")
                 try:
-                    ps = json.loads(ps_raw)
-                    print(f"DEBUG: After JSON parse - type: {type(ps)}, length: {len(ps) if isinstance(ps, (list, tuple)) else 'N/A'}")
+                    ps = ast.literal_eval(ps_raw)
+                    print(f"DEBUG: After ast.literal_eval - type: {type(ps)}, length: {len(ps) if isinstance(ps, (list, tuple)) else 'N/A'}")
                     if isinstance(ps, list) and len(ps) > 0:
                         print(f"DEBUG: processed_states[0] type: {type(ps[0])}")
                         if isinstance(ps[0], dict):
                             print(f"DEBUG: processed_states[0] keys: {list(ps[0].keys())}")
                             # Print sample values for key fields
-                            for k in ["action", "state", "tree", "action_type", "coords", "x", "y"]:
+                            for k in ["action", "state", "tree", "dom", "action_type", "coords", "x", "y", "time"]:
                                 if k in ps[0]:
                                     v = ps[0][k]
                                     if isinstance(v, dict):
@@ -328,7 +328,7 @@ def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
                         else:
                             print(f"DEBUG: processed_states[0] = {str(ps[0])[:200]}")
                 except Exception as e:
-                    print(f"DEBUG: Failed to parse JSON: {e}")
+                    print(f"DEBUG: Failed to parse with ast.literal_eval: {e}")
             elif isinstance(ps_raw, (list, tuple)):
                 print(f"DEBUG: processed_states is list, length: {len(ps_raw)}")
                 if len(ps_raw) > 0:
@@ -350,17 +350,23 @@ def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
         task_name = item.get("task_name", "") or item.get("subdomain", "") or item.get("task", "")
         processed_states_raw = item.get("processed_states", [])
         
-        # Parse processed_states if it's a JSON string
+        # Parse processed_states if it's a string (Python repr format with single quotes)
         processed_states = []
         if isinstance(processed_states_raw, str):
             try:
-                processed_states = json.loads(processed_states_raw)
-            except Exception as e:
-                if idx == 0:
-                    print(f"DEBUG: Failed to parse processed_states JSON: {e}")
-                    print(f"DEBUG: First 200 chars: {processed_states_raw[:200]}")
-                skipped_no_processed += 1
-                continue
+                # Try ast.literal_eval first (handles Python repr with single quotes)
+                processed_states = ast.literal_eval(processed_states_raw)
+            except Exception as e1:
+                # Fallback to json.loads
+                try:
+                    processed_states = json.loads(processed_states_raw)
+                except Exception as e2:
+                    if idx == 0:
+                        print(f"DEBUG: Failed to parse processed_states with ast: {e1}")
+                        print(f"DEBUG: Failed to parse processed_states with json: {e2}")
+                        print(f"DEBUG: First 200 chars: {processed_states_raw[:200]}")
+                    skipped_no_processed += 1
+                    continue
         elif isinstance(processed_states_raw, list):
             processed_states = processed_states_raw
         
