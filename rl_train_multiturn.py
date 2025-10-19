@@ -277,214 +277,33 @@ def load_mind2web_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
 
 
 def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
-    """Load MiniWob++ from HF parquet shards (LucasThil/miniwob_plusplus_v2_raw format).
-    Reference: https://huggingface.co/datasets/LucasThil/miniwob_plusplus_v2_raw/tree/main/data
-    Maps episodes into multi-turn steps with per-step actions and targets.
+    """Load MiniWob++ from preprocessed JSON metadata.
+    First preprocess with: python prepare/hf_miniwob.py --data_root $DATA_DIR/MiniWob
+    Reference: https://huggingface.co/datasets/LucasThil/miniwob_plusplus_v2_raw
     """
-    import glob
-    try:
-        import pyarrow.parquet as pq
-    except ImportError:
-        raise ImportError("pyarrow is required to read MiniWob++ parquet. Install: pip install pyarrow")
-    
     base_dir = os.path.join(dataset_dir, "MiniWob")
-    data_dir = os.path.join(base_dir, "data")
-    if not os.path.isdir(data_dir):
-        raise FileNotFoundError(f"MiniWob++ data folder not found: {data_dir}. Download with: huggingface-cli download LucasThil/miniwob_plusplus_v2_raw --repo-type dataset --local-dir {base_dir}")
+    metadata_dir = os.path.join(base_dir, "metadata")
     
-    # Read all train-*.parquet files
-    shard_files = sorted(glob.glob(os.path.join(data_dir, "train-*.parquet")))
-    if not shard_files:
-        raise FileNotFoundError(f"No parquet shards in {data_dir}")
+    # Map split names
+    split_map = {"train": "miniwob_train", "test": "miniwob_test", "val": "miniwob_val"}
+    json_name = split_map.get(split, f"miniwob_{split}")
+    meta_path = os.path.join(metadata_dir, f"{json_name}.json")
     
-    raw = []
-    for fp in shard_files:
-        table = pq.read_table(fp)
-        raw.extend(table.to_pylist())
+    if not os.path.exists(meta_path):
+        raise FileNotFoundError(
+            f"MiniWob++ preprocessed metadata not found: {meta_path}\n"
+            f"Please run preprocessing first:\n"
+            f"  python prepare/hf_miniwob.py --data_root {base_dir}"
+        )
     
-    # Debug: print schema from first item
-    if len(raw) > 0:
-        print(f"DEBUG: MiniWob++ schema keys: {list(raw[0].keys())}")
-        if "processed_states" in raw[0]:
-            ps_raw = raw[0]["processed_states"]
-            print(f"DEBUG: processed_states type: {type(ps_raw)}")
-            if isinstance(ps_raw, str):
-                print(f"DEBUG: processed_states is string, first 200 chars: {ps_raw[:200]}")
-                try:
-                    ps = ast.literal_eval(ps_raw)
-                    print(f"DEBUG: After ast.literal_eval - type: {type(ps)}, length: {len(ps) if isinstance(ps, (list, tuple)) else 'N/A'}")
-                    if isinstance(ps, list) and len(ps) > 0:
-                        print(f"DEBUG: processed_states[0] type: {type(ps[0])}")
-                        if isinstance(ps[0], dict):
-                            print(f"DEBUG: processed_states[0] keys: {list(ps[0].keys())}")
-                            # Print sample values for key fields
-                            for k in ["action", "state", "tree", "dom", "action_type", "coords", "x", "y", "time"]:
-                                if k in ps[0]:
-                                    v = ps[0][k]
-                                    if isinstance(v, dict):
-                                        print(f"DEBUG:   {k}: dict with keys {list(v.keys())}")
-                                    else:
-                                        print(f"DEBUG:   {k}: {type(v).__name__} = {str(v)[:100]}")
-                        else:
-                            print(f"DEBUG: processed_states[0] = {str(ps[0])[:200]}")
-                except Exception as e:
-                    print(f"DEBUG: Failed to parse with ast.literal_eval: {e}")
-            elif isinstance(ps_raw, (list, tuple)):
-                print(f"DEBUG: processed_states is list, length: {len(ps_raw)}")
-                if len(ps_raw) > 0:
-                    print(f"DEBUG: processed_states[0] keys: {list(ps_raw[0].keys()) if isinstance(ps_raw[0], dict) else 'not dict'}")
+    with open(meta_path) as f:
+        samples = json.load(f)
     
-    # Images: render on-the-fly or skip; for now placeholder
     img_dir = os.path.join(base_dir, "screenshots")
     if not os.path.isdir(img_dir):
         img_dir = os.path.join(base_dir, "images")
-
-    samples: List[dict] = []
-    skipped_no_processed = 0
-    skipped_no_steps = 0
-    skipped_no_coords = 0
     
-    for idx, item in enumerate(raw):
-        # MiniWob++ actual schema: "task_name", "utterance", "reward", "raw_reward", "processed_states"
-        # processed_states is a JSON string that needs parsing
-        task_name = item.get("task_name", "") or item.get("subdomain", "") or item.get("task", "")
-        processed_states_raw = item.get("processed_states", [])
-        
-        # Parse processed_states if it's a string (Python repr format with single quotes)
-        processed_states = []
-        if isinstance(processed_states_raw, str):
-            try:
-                # Try ast.literal_eval first (handles Python repr with single quotes)
-                processed_states = ast.literal_eval(processed_states_raw)
-            except Exception as e1:
-                # Fallback to json.loads
-                try:
-                    processed_states = json.loads(processed_states_raw)
-                except Exception as e2:
-                    if idx == 0:
-                        print(f"DEBUG: Failed to parse processed_states with ast: {e1}")
-                        print(f"DEBUG: Failed to parse processed_states with json: {e2}")
-                        print(f"DEBUG: First 200 chars: {processed_states_raw[:200]}")
-                    skipped_no_processed += 1
-                    continue
-        elif isinstance(processed_states_raw, list):
-            processed_states = processed_states_raw
-        
-        # New schema: processed_states contains trajectory steps with embedded action/state info
-        # Old schema fallback: separate states and actions
-        if processed_states and isinstance(processed_states, list) and len(processed_states) > 0:
-            # Use processed_states (new schema)
-            use_states = processed_states
-        else:
-            # Fallback to old schema
-            states_old = item.get("states", [])
-            actions_old = item.get("actions", [])
-            if not actions_old or not states_old:
-                skipped_no_processed += 1
-                if idx == 0:
-                    print(f"DEBUG: First item skipped - processed_states empty/missing")
-                continue
-            # Merge into processed_states-like structure
-            use_states = []
-            for i, (st, act) in enumerate(zip(states_old, actions_old)):
-                combined = {"state": st, "action": act}
-                use_states.append(combined)
-        
-        if not use_states:
-            skipped_no_processed += 1
-            continue
-        
-        # Build per-step instructions and targets
-        norm_steps = []
-        img_w, img_h = 160, 210  # default MiniWob viewport
-        
-        # Try to infer viewport from first state
-        try:
-            first_state = use_states[0].get("state") or use_states[0].get("tree") or use_states[0]
-            if isinstance(first_state, dict):
-                rw = first_state.get("width")
-                rh = first_state.get("height")
-                if isinstance(rw, (int, float)) and isinstance(rh, (int, float)) and rw > 0 and rh > 0:
-                    img_w, img_h = float(rw), float(rh)
-        except Exception:
-            pass
-
-        def pick_node_from_state(state_dict: dict) -> dict:
-            # Prefer focused node, else clickable, else first
-            try:
-                tree = state_dict.get("tree") or state_dict.get("state") or state_dict
-                q = [tree]
-                candidates = []
-                while q:
-                    n = q.pop(0)
-                    if isinstance(n, dict):
-                        if n.get("focused") is True:
-                            return n
-                        candidates.append(n)
-                        for c in n.get("children", []) or []:
-                            q.append(c)
-                # Clickable-like
-                for n in candidates:
-                    classes = str(n.get("classes", "")).lower()
-                    if any(k in classes for k in ["button", "link", "click", "reply", "like"]):
-                        return n
-                return candidates[0] if candidates else {}
-            except Exception:
-                return {}
-
-        for i, step_dict in enumerate(use_states):
-            # MiniWob++ schema: each step has 'time', 'action_type', 'dom' (tree)
-            act_type = step_dict.get("action_type", "") or "click"
-            
-            # For MiniWob++, we derive coordinates from the DOM tree
-            # The dom tree is the step_dict itself or nested in step_dict["dom"]
-            dom_tree = step_dict.get("dom") or step_dict
-            
-            instr = f"{task_name} [{act_type}]"
-            coords = None
-            
-            # Derive from DOM tree - pick a node and get its center
-            node = pick_node_from_state({"tree": dom_tree} if "dom" in step_dict else step_dict)
-            if node and isinstance(node, dict):
-                try:
-                    left = float(node.get("left", 0.0))
-                    top = float(node.get("top", 0.0))
-                    width = float(node.get("width", 0.0))
-                    height = float(node.get("height", 0.0))
-                    if width > 0 and height > 0:
-                        coords = [left + width / 2.0, top + height / 2.0]
-                except Exception:
-                    pass
-            
-            if coords is None:
-                skipped_no_coords += 1
-                if idx == 0 and i == 0:
-                    print(f"DEBUG: First item, first step - no coords found from DOM tree")
-                    print(f"DEBUG:   step_dict keys: {list(step_dict.keys())}")
-                    print(f"DEBUG:   dom_tree tag: {dom_tree.get('tag') if isinstance(dom_tree, dict) else 'N/A'}")
-                continue
-            
-            try:
-                px = min(1.0, max(0.0, float(coords[0]) / img_w))
-                py = min(1.0, max(0.0, float(coords[1]) / img_h))
-                pt = [px, py]
-            except Exception as e:
-                if idx == 0 and i == 0:
-                    print(f"DEBUG: First item, first step - coord normalization failed: {e}")
-                continue
-            
-            s_img = f"step_{i}.png"
-            norm_steps.append({"instruction": instr, "point": pt, "img_url": s_img})
-        
-        if len(norm_steps) == 0:
-            skipped_no_steps += 1
-            if idx == 0:
-                print(f"DEBUG: First item generated 0 norm_steps from {len(use_states)} use_states")
-            continue
-        samples.append({"base_img_url": None, "steps": norm_steps})
-
-    print(f"MiniWob++ loaded {len(samples)} multi-turn items from {len(shard_files)} shards")
-    print(f"DEBUG: Skipped {skipped_no_processed} (no processed_states), {skipped_no_steps} (no valid steps), {skipped_no_coords} step coords missing")
+    print(f"MiniWob++ loaded {len(samples)} multi-turn items from {meta_path}")
     return img_dir, samples
 
 
