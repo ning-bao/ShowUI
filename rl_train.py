@@ -100,6 +100,68 @@ def find_latest_epoch_checkpoint(base_dir: str) -> tuple:
 
 
 def load_split_items(dataset_dir: str, dataset: str, split: str) -> Tuple[str, List[dict]]:
+    # Special handling for Novelis-style JSON: free-form JSON file with bbox targets
+    if dataset.lower() == "novelis":
+        # Resolve JSON path: allow absolute path, relative to CWD, or under dataset_dir
+        json_path = split
+        if not json_path.endswith(".json"):
+            json_path = f"{json_path}.json"
+        if not os.path.isabs(json_path):
+            cand = os.path.join(dataset_dir, json_path)
+            json_path = cand if os.path.exists(cand) else json_path
+
+        with open(json_path) as f:
+            raw_items = json.load(f)
+
+        samples: List[dict] = []
+        for it in raw_items:
+            img_rel_or_abs = it.get("image_context", "")
+            if not img_rel_or_abs:
+                continue
+            img_path = img_rel_or_abs if os.path.isabs(img_rel_or_abs) else os.path.join(dataset_dir, img_rel_or_abs)
+            if not os.path.exists(img_path):
+                # Try without dataset_dir if already combined incorrectly
+                if os.path.isabs(img_rel_or_abs) and os.path.exists(img_rel_or_abs):
+                    img_path = img_rel_or_abs
+                else:
+                    continue
+
+            # Read size to normalize the bbox center
+            try:
+                with Image.open(img_path) as im:
+                    width, height = im.size
+            except Exception:
+                continue
+
+            bbox = it.get("target_bbox", None)
+            if not bbox or len(bbox) != 4:
+                continue
+            x, y, w, h = bbox
+            cx = (float(x) + float(w) / 2.0) / max(1.0, float(width))
+            cy = (float(y) + float(h) / 2.0) / max(1.0, float(height))
+            cx = min(1.0, max(0.0, cx))
+            cy = min(1.0, max(0.0, cy))
+
+            instruction = it.get("goal") or it.get("rubric") or ""
+            if not instruction:
+                # Fallback to app/id description
+                instruction = f"Locate target for {it.get('app', 'unknown')} - {it.get('id', '')}"
+
+            samples.append({
+                # Use absolute path directly; we'll set img_dir to empty string
+                "img_url": os.path.abspath(img_path),
+                "element": [
+                    {
+                        "instruction": instruction,
+                        "point": [cx, cy],
+                    }
+                ],
+            })
+
+        # Return empty img_dir so that downstream os.path.join("", abs_path) yields abs_path
+        return "", samples
+
+    # Default ShowUI-style datasets
     base_image_dir = os.path.join(dataset_dir, dataset_mapping[dataset])
     meta_dir = os.path.join(base_image_dir, "metadata")
     img_dir = os.path.join(base_image_dir, "images")
