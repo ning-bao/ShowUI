@@ -311,8 +311,9 @@ def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
             if isinstance(ps_raw, str):
                 print(f"DEBUG: processed_states is string, first 200 chars: {ps_raw[:200]}")
                 try:
-                    ps = ast.literal_eval(ps_raw)
-                    print(f"DEBUG: After ast.literal_eval - type: {type(ps)}, length: {len(ps) if isinstance(ps, (list, tuple)) else 'N/A'}")
+                    json_str = ps_raw.replace("'", '"').replace('True', 'true').replace('False', 'false').replace('None', 'null')
+                    ps = json.loads(json_str)
+                    print(f"DEBUG: After JSON parse - type: {type(ps)}, length: {len(ps) if isinstance(ps, (list, tuple)) else 'N/A'}")
                     if isinstance(ps, list) and len(ps) > 0:
                         print(f"DEBUG: processed_states[0] type: {type(ps[0])}")
                         if isinstance(ps[0], dict):
@@ -328,7 +329,7 @@ def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
                         else:
                             print(f"DEBUG: processed_states[0] = {str(ps[0])[:200]}")
                 except Exception as e:
-                    print(f"DEBUG: Failed to parse with ast.literal_eval: {e}")
+                    print(f"DEBUG: Failed to parse: {e}")
             elif isinstance(ps_raw, (list, tuple)):
                 print(f"DEBUG: processed_states is list, length: {len(ps_raw)}")
                 if len(ps_raw) > 0:
@@ -351,20 +352,20 @@ def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
         processed_states_raw = item.get("processed_states", [])
         
         # Parse processed_states if it's a string (Python repr format with single quotes)
+        # Use a faster parsing method: replace single quotes with double quotes for JSON
         processed_states = []
         if isinstance(processed_states_raw, str):
             try:
-                # Try ast.literal_eval first (handles Python repr with single quotes)
-                processed_states = ast.literal_eval(processed_states_raw)
-            except Exception as e1:
-                # Fallback to json.loads
+                # Fast path: convert Python repr to JSON by replacing quotes (works for most cases)
+                json_str = processed_states_raw.replace("'", '"').replace('True', 'true').replace('False', 'false').replace('None', 'null')
+                processed_states = json.loads(json_str)
+            except Exception:
+                # Fallback to ast.literal_eval (slower but more robust)
                 try:
-                    processed_states = json.loads(processed_states_raw)
-                except Exception as e2:
+                    processed_states = ast.literal_eval(processed_states_raw)
+                except Exception as e:
                     if idx == 0:
-                        print(f"DEBUG: Failed to parse processed_states with ast: {e1}")
-                        print(f"DEBUG: Failed to parse processed_states with json: {e2}")
-                        print(f"DEBUG: First 200 chars: {processed_states_raw[:200]}")
+                        print(f"DEBUG: Failed to parse processed_states: {e}")
                     skipped_no_processed += 1
                     continue
         elif isinstance(processed_states_raw, list):
@@ -433,14 +434,17 @@ def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
                 return {}
 
         for i, step_dict in enumerate(use_states):
-            # Extract action info (may be embedded in step_dict or separate field)
+            # MiniWob++ schema: each step has 'time', 'action_type', 'dom' (tree)
+            # Extract action info
             act = step_dict.get("action", {})
-            act_type = act.get("action_type", "") or act.get("type", "") or step_dict.get("action_type", "") or "click"
+            act_type = act.get("action_type", "") or step_dict.get("action_type", "") or "click"
             
-            # Flexible coord extraction
+            # MiniWob++ doesn't store explicit coords; derive from DOM tree
+            # The 'dom' field contains the full tree; we need the focused/target node
             coords = None
-            # Try action subdict first
-            for kpair in (("coords", None), ("x", "y"), ("mouseX", "mouseY"), ("clickX", "clickY")):
+            
+            # First, try to find explicit coords in various fields
+            for kpair in (("coords", None), ("x", "y"), ("mouseX", "mouseY"), ("clickX", "clickY"), ("pos", None)):
                 if kpair[1] is None:
                     v = act.get(kpair[0]) or step_dict.get(kpair[0])
                     if isinstance(v, (list, tuple)) and len(v) == 2:
@@ -455,8 +459,9 @@ def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
             
             instr = f"{task_name} [{act_type}]"
             if coords is None:
-                # Derive from state tree
-                node = pick_node_from_state(step_dict)
+                # Derive from DOM tree (step_dict contains 'dom' field)
+                dom_tree = step_dict.get("dom") or step_dict.get("state") or step_dict.get("tree") or {}
+                node = pick_node_from_state({"tree": dom_tree} if dom_tree else step_dict)
                 try:
                     left = float(node.get("left", 0.0))
                     top = float(node.get("top", 0.0))
