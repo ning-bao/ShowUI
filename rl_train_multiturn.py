@@ -302,6 +302,14 @@ def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
         table = pq.read_table(fp)
         raw.extend(table.to_pylist())
     
+    # Debug: print schema from first item
+    if len(raw) > 0:
+        print(f"DEBUG: MiniWob++ schema keys: {list(raw[0].keys())}")
+        if "processed_states" in raw[0]:
+            ps = raw[0]["processed_states"]
+            if isinstance(ps, list) and len(ps) > 0:
+                print(f"DEBUG: processed_states has {len(ps)} items, first keys: {list(ps[0].keys())}")
+    
     # Images: render on-the-fly or skip; for now placeholder
     img_dir = os.path.join(base_dir, "screenshots")
     if not os.path.isdir(img_dir):
@@ -309,32 +317,50 @@ def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
 
     samples: List[dict] = []
     for item in raw:
-        # MiniWob++ schema: "subdomain" (task name), "states" (list of DOM states), "actions" (list of actions), "rewards" (list of per-step rewards)
-        task_name = item.get("subdomain", "") or item.get("task", "")
-        states = item.get("states", [])
-        actions_raw = item.get("actions", [])
-        if not actions_raw or not states:
+        # MiniWob++ actual schema: "task_name", "utterance", "reward", "raw_reward", "processed_states"
+        # processed_states is a list of state dicts, each potentially containing action info
+        task_name = item.get("task_name", "") or item.get("subdomain", "") or item.get("task", "")
+        processed_states = item.get("processed_states", [])
+        
+        # New schema: processed_states contains trajectory steps with embedded action/state info
+        # Old schema fallback: separate states and actions
+        if processed_states and isinstance(processed_states, list) and len(processed_states) > 0:
+            # Use processed_states (new schema)
+            use_states = processed_states
+        else:
+            # Fallback to old schema
+            states_old = item.get("states", [])
+            actions_old = item.get("actions", [])
+            if not actions_old or not states_old:
+                continue
+            # Merge into processed_states-like structure
+            use_states = []
+            for i, (st, act) in enumerate(zip(states_old, actions_old)):
+                combined = {"state": st, "action": act}
+                use_states.append(combined)
+        
+        if not use_states:
             continue
-        # Build per-step instructions and targets from actions or derive from state
+        
+        # Build per-step instructions and targets
         norm_steps = []
-        # Try to infer viewport from top-level state if present
-        img_w, img_h = 160, 210
+        img_w, img_h = 160, 210  # default MiniWob viewport
+        
+        # Try to infer viewport from first state
         try:
-            if isinstance(states, list) and len(states) > 0:
-                root = states[0].get("tree") or states[0]
-                # some schemas store width/height at root
-                rw = root.get("width")
-                rh = root.get("height")
+            first_state = use_states[0].get("state") or use_states[0].get("tree") or use_states[0]
+            if isinstance(first_state, dict):
+                rw = first_state.get("width")
+                rh = first_state.get("height")
                 if isinstance(rw, (int, float)) and isinstance(rh, (int, float)) and rw > 0 and rh > 0:
                     img_w, img_h = float(rw), float(rh)
         except Exception:
             pass
 
-        def pick_node_from_state(state: dict) -> dict:
-            # Prefer focused node
+        def pick_node_from_state(state_dict: dict) -> dict:
+            # Prefer focused node, else clickable, else first
             try:
-                tree = state.get("tree") or state
-                # Flatten BFS
+                tree = state_dict.get("tree") or state_dict.get("state") or state_dict
                 q = [tree]
                 candidates = []
                 while q:
@@ -345,38 +371,40 @@ def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
                         candidates.append(n)
                         for c in n.get("children", []) or []:
                             q.append(c)
-                # Fallback: first node with clickable-like class
+                # Clickable-like
                 for n in candidates:
                     classes = str(n.get("classes", "")).lower()
                     if any(k in classes for k in ["button", "link", "click", "reply", "like"]):
                         return n
-                # Else top-most
                 return candidates[0] if candidates else {}
             except Exception:
                 return {}
 
-        for i, act in enumerate(actions_raw):
-            act_type = act.get("action_type", "")
+        for i, step_dict in enumerate(use_states):
+            # Extract action info (may be embedded in step_dict or separate field)
+            act = step_dict.get("action", {})
+            act_type = act.get("action_type", "") or act.get("type", "") or step_dict.get("action_type", "") or "click"
+            
             # Flexible coord extraction
             coords = None
-            for kpair in (("coords", None), ("x", "y"), ("mouseX", "mouseY")):
+            # Try action subdict first
+            for kpair in (("coords", None), ("x", "y"), ("mouseX", "mouseY"), ("clickX", "clickY")):
                 if kpair[1] is None:
-                    v = act.get(kpair[0])
+                    v = act.get(kpair[0]) or step_dict.get(kpair[0])
                     if isinstance(v, (list, tuple)) and len(v) == 2:
                         coords = [v[0], v[1]]
                         break
                 else:
-                    x = act.get(kpair[0])
-                    y = act.get(kpair[1])
+                    x = act.get(kpair[0]) or step_dict.get(kpair[0])
+                    y = act.get(kpair[1]) or step_dict.get(kpair[1])
                     if isinstance(x, (int, float)) and isinstance(y, (int, float)):
                         coords = [x, y]
                         break
-
+            
             instr = f"{task_name} [{act_type}]"
             if coords is None:
-                # derive from state
-                st = states[min(i, len(states) - 1)] if len(states) > 0 else {}
-                node = pick_node_from_state(st)
+                # Derive from state tree
+                node = pick_node_from_state(step_dict)
                 try:
                     left = float(node.get("left", 0.0))
                     top = float(node.get("top", 0.0))
@@ -384,21 +412,21 @@ def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
                     height = float(node.get("height", 0.0))
                     coords = [left + width / 2.0, top + height / 2.0]
                 except Exception:
-                    coords = None
-
+                    pass
+            
             if coords is None:
                 continue
-
+            
             try:
                 px = min(1.0, max(0.0, float(coords[0]) / img_w))
                 py = min(1.0, max(0.0, float(coords[1]) / img_h))
                 pt = [px, py]
             except Exception:
                 continue
-
-            # Image: would render from states[i]; placeholder for now
+            
             s_img = f"step_{i}.png"
             norm_steps.append({"instruction": instr, "point": pt, "img_url": s_img})
+        
         if len(norm_steps) == 0:
             continue
         samples.append({"base_img_url": None, "steps": norm_steps})
