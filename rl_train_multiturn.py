@@ -128,6 +128,158 @@ def load_split_items(dataset_dir: str, dataset: str, split: str) -> Tuple[str, L
     return img_dir, samples
 
 
+def load_osworld_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
+    """Load OSWorld-style multi-turn items.
+    Expected structure (flexible): each item has a list of steps, where each step contains
+    an instruction and a target (point or bbox). Optional per-step image URLs.
+    """
+    base_dir = os.path.join(dataset_dir, "OSWorld")
+    meta_dir = os.path.join(base_dir, "metadata")
+    img_dir = os.path.join(base_dir, "images")
+    meta_path = os.path.join(meta_dir, f"{split}.json")
+    with open(meta_path) as f:
+        raw = json.load(f)
+
+    def normalize_point(step, img_w=None, img_h=None):
+        # prefer normalized point
+        if "point" in step and isinstance(step["point"], (list, tuple)) and len(step["point"]) == 2:
+            try:
+                x, y = float(step["point"][0]), float(step["point"][1])
+                return [min(1.0, max(0.0, x)), min(1.0, max(0.0, y))]
+            except Exception:
+                pass
+        # derive from bbox center if available
+        if "bbox" in step and isinstance(step["bbox"], (list, tuple)) and len(step["bbox"]) == 4 and img_w and img_h:
+            try:
+                x, y, w, h = step["bbox"]
+                cx = (x + w / 2.0) / float(img_w)
+                cy = (y + h / 2.0) / float(img_h)
+                return [min(1.0, max(0.0, cx)), min(1.0, max(0.0, cy))]
+            except Exception:
+                pass
+        return None
+
+    samples: List[dict] = []
+    for item in raw:
+        steps_src = item.get("steps") or item.get("trajectory") or []
+        base_img_url = item.get("img_url") or item.get("base_img_url") or None
+        img_size = item.get("img_size")
+        img_w, img_h = (img_size[0], img_size[1]) if isinstance(img_size, (list, tuple)) and len(img_size) == 2 else (None, None)
+        norm_steps = []
+        for st in steps_src:
+            instr = st.get("instruction") or st.get("query") or st.get("text") or ""
+            s_img = st.get("img_url") or base_img_url
+            pt = normalize_point(st, img_w=img_w, img_h=img_h)
+            if pt is None:
+                # skip steps without a usable target
+                continue
+            norm_steps.append({"instruction": instr, "point": pt, "img_url": s_img})
+        if len(norm_steps) == 0:
+            continue
+        samples.append({"base_img_url": base_img_url, "steps": norm_steps})
+
+    return img_dir, samples
+
+
+def load_mind2web_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
+    """Load Mind2Web-style multi-turn items, mapped into (instruction, point[, img_url]) steps.
+    Expects a preprocessed JSON with per-step 'instruction' and either 'point' (normalized) or 'bbox' plus 'img_size'.
+    """
+    base_dir = os.path.join(dataset_dir, "Mind2Web")
+    meta_dir = os.path.join(base_dir, "metadata")
+    img_dir = os.path.join(base_dir, "images")
+    meta_path = os.path.join(meta_dir, f"{split}.json")
+    with open(meta_path) as f:
+        raw = json.load(f)
+
+    def normalize_point(step, img_w=None, img_h=None):
+        if "point" in step and isinstance(step["point"], (list, tuple)) and len(step["point"]) == 2:
+            try:
+                x, y = float(step["point"][0]), float(step["point"][1])
+                return [min(1.0, max(0.0, x)), min(1.0, max(0.0, y))]
+            except Exception:
+                return None
+        if "bbox" in step and isinstance(step["bbox"], (list, tuple)) and len(step["bbox"]) == 4 and img_w and img_h:
+            try:
+                x, y, w, h = step["bbox"]
+                cx = (x + w / 2.0) / float(img_w)
+                cy = (y + h / 2.0) / float(img_h)
+                return [min(1.0, max(0.0, cx)), min(1.0, max(0.0, cy))]
+            except Exception:
+                return None
+        return None
+
+    samples: List[dict] = []
+    for item in raw:
+        steps_src = item.get("steps") or item.get("trajectory") or []
+        base_img_url = item.get("img_url") or item.get("base_img_url") or None
+        img_size = item.get("img_size")
+        img_w, img_h = (img_size[0], img_size[1]) if isinstance(img_size, (list, tuple)) and len(img_size) == 2 else (None, None)
+        norm_steps = []
+        for st in steps_src:
+            instr = st.get("instruction") or st.get("utterance") or st.get("action_desc") or ""
+            s_img = st.get("img_url") or base_img_url
+            pt = normalize_point(st, img_w=img_w, img_h=img_h)
+            if pt is None:
+                continue
+            norm_steps.append({"instruction": instr, "point": pt, "img_url": s_img})
+        if len(norm_steps) == 0:
+            continue
+        samples.append({"base_img_url": base_img_url, "steps": norm_steps})
+
+    return img_dir, samples
+
+
+def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
+    """Load MiniWob++-style items into multi-turn steps.
+    Expects a JSON with per-episode 'steps' including 'instruction' (or task name) and 'point' normalized.
+    """
+    base_dir = os.path.join(dataset_dir, "MiniWob")
+    meta_dir = os.path.join(base_dir, "metadata")
+    img_dir = os.path.join(base_dir, "images")
+    meta_path = os.path.join(meta_dir, f"{split}.json")
+    with open(meta_path) as f:
+        raw = json.load(f)
+
+    def normalize_point(step, img_w=None, img_h=None):
+        if "point" in step and isinstance(step["point"], (list, tuple)) and len(step["point"]) == 2:
+            try:
+                x, y = float(step["point"][0]), float(step["point"][1])
+                return [min(1.0, max(0.0, x)), min(1.0, max(0.0, y))]
+            except Exception:
+                return None
+        if "bbox" in step and isinstance(step["bbox"], (list, tuple)) and len(step["bbox"]) == 4 and img_w and img_h:
+            try:
+                x, y, w, h = step["bbox"]
+                cx = (x + w / 2.0) / float(img_w)
+                cy = (y + h / 2.0) / float(img_h)
+                return [min(1.0, max(0.0, cx)), min(1.0, max(0.0, cy))]
+            except Exception:
+                return None
+        return None
+
+    samples: List[dict] = []
+    for item in raw:
+        steps_src = item.get("steps") or item.get("trajectory") or []
+        base_img_url = item.get("img_url") or item.get("base_img_url") or None
+        img_size = item.get("img_size")
+        img_w, img_h = (img_size[0], img_size[1]) if isinstance(img_size, (list, tuple)) and len(img_size) == 2 else (None, None)
+        task_name = item.get("task") or item.get("env") or ""
+        norm_steps = []
+        for st in steps_src:
+            instr = st.get("instruction") or task_name or ""
+            s_img = st.get("img_url") or base_img_url
+            pt = normalize_point(st, img_w=img_w, img_h=img_h)
+            if pt is None:
+                continue
+            norm_steps.append({"instruction": instr, "point": pt, "img_url": s_img})
+        if len(norm_steps) == 0:
+            continue
+        samples.append({"base_img_url": base_img_url, "steps": norm_steps})
+
+    return img_dir, samples
+
+
 def build_messages_for_turn(processor, instruction: str, img: Image.Image, min_pixels: int, max_pixels: int, history: Optional[List[dict]]) -> Tuple[str, dict]:
     img_dict = {"type": "image", "min_pixels": min_pixels, "max_pixels": max_pixels}
     if history is None:
@@ -260,7 +412,7 @@ def evaluate_screenspot_subset_multiturn(processor, model, dataset_dir: str, lim
     return ok / N
 
 
-def generate_multiturn_trajectory(model, processor, device, instruction: str, image_path: str, tgt_xy: Tuple[float, float], args: MTRLArgs):
+def generate_multiturn_trajectory(model, processor, device, instruction: str, image_path: str, tgt_xy: Tuple[float, float], args: MTRLArgs, osworld_steps: Optional[List[dict]] = None):
     img = Image.open(image_path).convert("RGB")
     min_pixels = args.min_visual_tokens * 28 * 28
     max_pixels = args.max_visual_tokens * 28 * 28
@@ -282,7 +434,21 @@ def generate_multiturn_trajectory(model, processor, device, instruction: str, im
         param_dtype = torch.float32
 
     for t in range(turns):
-        text, inputs = build_messages_for_turn(processor, instruction, img, min_pixels, max_pixels, history)
+        # Select per-turn instruction/target/image for OSWorld, otherwise reuse single-turn inputs
+        if osworld_steps and t < len(osworld_steps):
+            instr_t = osworld_steps[t].get("instruction", instruction)
+            tgt_t = osworld_steps[t].get("point", tgt_xy)
+            img_path_t = osworld_steps[t].get("img_url") or image_path
+            try:
+                img_t = Image.open(img_path_t).convert("RGB") if os.path.exists(img_path_t) else img
+            except Exception:
+                img_t = img
+        else:
+            instr_t = instruction
+            tgt_t = tgt_xy
+            img_t = img
+
+        text, inputs = build_messages_for_turn(processor, instr_t, img_t, min_pixels, max_pixels, history)
         for k, v in list(inputs.items()):
             if isinstance(v, torch.Tensor):
                 inputs[k] = v.to(device)
@@ -338,7 +504,8 @@ def generate_multiturn_trajectory(model, processor, device, instruction: str, im
         pred_text = processor.batch_decode(gen, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
         decoded_texts.append(pred_text)
         pred_xy = parse_coord(pred_text)
-        rew = compute_turn_reward(pred_xy, tgt_xy, args.tau_success, args.alpha_dist)
+        # reward against per-turn target (OSWorld) or single target
+        rew = compute_turn_reward(pred_xy, tgt_t, args.tau_success, args.alpha_dist)
         rewards.append(rew)
 
         if not any(math.isnan(v) for v in pred_xy):
@@ -367,9 +534,13 @@ def reinforce_step_multiturn(model, processor, device, batch, args: MTRLArgs):
 
     has_ref = getattr(args, "_ref_logits_fn", None) is not None and args.kl_coef > 0.0
 
-    for i, (instruction, image_path, tgt_xy) in enumerate(batch):
+    for i, item in enumerate(batch):
+        instruction = item[0]
+        image_path = item[1]
+        tgt_xy = item[2]
+        osworld_steps = item[3] if len(item) > 3 else None
         texts, proc_batches, gen_ids, decoded, rewards = generate_multiturn_trajectory(
-            model, processor, device, instruction, image_path, tgt_xy, args
+            model, processor, device, instruction, image_path, tgt_xy, args, osworld_steps=osworld_steps
         )
         # track mean per-turn reward for this trajectory
         try:
@@ -719,7 +890,23 @@ def main():
         except Exception as e:
             print(f"Resume failed: {e}")
 
-    img_dir, samples = load_split_items(args.dataset_dir, args.train_dataset, args.train_json)
+    # Dataset loader selection (OSWorld / Mind2Web / MiniWob / shared grounding)
+    ds_name = str(args.train_dataset).lower()
+    is_osworld = ("osworld" in ds_name)
+    is_mind2web = ("mind2web" in ds_name)
+    is_miniwob = ("miniwob" in ds_name) or ("miniwob++" in ds_name)
+    try:
+        if is_osworld:
+            img_dir, samples = load_osworld_items(args.dataset_dir, args.train_json)
+        elif is_mind2web:
+            img_dir, samples = load_mind2web_items(args.dataset_dir, args.train_json)
+        elif is_miniwob:
+            img_dir, samples = load_miniwob_items(args.dataset_dir, args.train_json)
+        else:
+            img_dir, samples = load_split_items(args.dataset_dir, args.train_dataset, args.train_json)
+    except Exception as e:
+        print(f"Dataset load failed ({args.train_dataset}): {e}; falling back to shared grounding loader.")
+        img_dir, samples = load_split_items(args.dataset_dir, args.train_dataset, args.train_json)
     if global_rank == 0:
         print(f"Loaded {len(samples)} samples from {args.train_dataset}/{args.train_json}")
 
@@ -777,22 +964,46 @@ def main():
             for micro in range(max(1, args.grad_accum_steps)):
                 batch_items = []
                 for _ in range(args.batch_size):
-                    item = None
-                    for cand in sample_epoch_iterator(samples):
-                        if cand.get("element"):
-                            item = cand
-                            break
-                    if item is None:
+                    if is_osworld or is_mind2web or is_miniwob:
                         item = random.choice(samples)
-                        if not item.get("element"):
+                        steps = item.get("steps", [])
+                        if not steps:
                             continue
-                    image_path = os.path.join(img_dir, item["img_url"]) if "img_url" in item else ""
-                    element = random.choice(item["element"]) if item.get("element") else None
-                    if element is None:
-                        continue
-                    instruction = element["instruction"]
-                    tgt_xy = (float(element["point"][0]), float(element["point"][1]))
-                    batch_items.append((instruction, image_path, tgt_xy))
+                        # trim to desired turns and ensure targets exist
+                        use_steps = [s for s in steps if isinstance(s.get("point"), (list, tuple)) and len(s.get("point")) == 2]
+                        if not use_steps:
+                            continue
+                        use_steps = use_steps[: max(1, int(args.turns_per_traj))]
+                        base_img_url = item.get("base_img_url") or (use_steps[0].get("img_url") if use_steps else None)
+                        image_path = os.path.join(img_dir, base_img_url) if base_img_url else ""
+                        first_instr = use_steps[0].get("instruction", "")
+                        first_pt = use_steps[0].get("point", [float("nan"), float("nan")])
+                        # expand step image paths to absolute
+                        steps_abs = []
+                        for s in use_steps:
+                            s_img = s.get("img_url")
+                            s_abs = dict(s)
+                            if s_img:
+                                s_abs["img_url"] = os.path.join(img_dir, s_img)
+                            steps_abs.append(s_abs)
+                        batch_items.append((first_instr, image_path, (float(first_pt[0]), float(first_pt[1])), steps_abs))
+                    else:
+                        item = None
+                        for cand in sample_epoch_iterator(samples):
+                            if cand.get("element"):
+                                item = cand
+                                break
+                        if item is None:
+                            item = random.choice(samples)
+                            if not item.get("element"):
+                                continue
+                        image_path = os.path.join(img_dir, item["img_url"]) if "img_url" in item else ""
+                        element = random.choice(item["element"]) if item.get("element") else None
+                        if element is None:
+                            continue
+                        instruction = element["instruction"]
+                        tgt_xy = (float(element["point"][0]), float(element["point"][1]))
+                        batch_items.append((instruction, image_path, tgt_xy))
 
                 if not batch_items:
                     continue

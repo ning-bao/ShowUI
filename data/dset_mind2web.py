@@ -82,18 +82,25 @@ class Mind2WebDataset(torch.utils.data.Dataset):
         self.max_pixels = processor.image_processor.max_pixels
         self.inference = inference
 
-        self.base_image_dir = os.path.join(dataset_dir, 'Mind2Web')
+        # Flexible root to support Hugging Face CLI downloads
+        # By default we look under <dataset_dir>/Mind2Web, but you can override with args_dict['base_subdir']
+        base_subdir = args_dict.get('base_subdir', 'Mind2Web')
+        self.base_image_dir = os.path.join(dataset_dir, base_subdir)
+
+        # Resolve metadata/images folders; support common alternates like 'screenshots'
         META_DIR = os.path.join(self.base_image_dir, "metadata")
-        self.IMG_DIR = os.path.join(self.base_image_dir, "images")
-        with open(os.path.join(META_DIR, "{}.json".format(json_data))) as f:
+        IMG_DIR1 = os.path.join(self.base_image_dir, "images")
+        IMG_DIR2 = os.path.join(self.base_image_dir, "screenshots")
+        self.IMG_DIR = IMG_DIR1 if os.path.isdir(IMG_DIR1) else IMG_DIR2
+
+        # Read split JSON
+        meta_path = os.path.join(META_DIR, f"{json_data}.json")
+        if not os.path.exists(meta_path):
+            raise FileNotFoundError(f"Mind2Web metadata not found at {meta_path}. Set args_dict['base_subdir'] to the correct folder or verify your download.")
+        with open(meta_path) as f:
             self.json_data = json.load(f)
 
         self.samples_per_epoch = args_dict.get('samples_per_epoch', 1)
-
-        META_DIR = os.path.join(self.base_image_dir, "metadata")
-        self.IMG_DIR = os.path.join(self.base_image_dir, "images")
-        with open(os.path.join(META_DIR, "{}.json".format(json_data))) as f:
-            self.json_data = json.load(f)
         self.num_turn = args_dict.get('num_turn', 0)
         self.num_history = args_dict.get('num_history', 0)
         self.interleaved_history = args_dict.get('interleaved_history', 'tttt')
@@ -102,7 +109,7 @@ class Mind2WebDataset(torch.utils.data.Dataset):
 
         self.vis_start = self.processor.tokenizer('<|vision_start|>')['input_ids']
         self.vis_end = self.processor.tokenizer('<|vision_end|>')['input_ids']
-        print(f"Dataset: Mind2Web; Split: {json_data}; # samples: {len(self.json_data)}")
+        print(f"Dataset: Mind2Web; Root: {self.base_image_dir}; Split: {json_data}; Images: {self.IMG_DIR}; # samples: {len(self.json_data)}")
 
     def __len__(self):
         # inference
@@ -200,9 +207,8 @@ class Mind2WebDataset(torch.utils.data.Dataset):
         idx = idx % len(self.json_data)
 
         item = self.json_data[idx]
-        if 'img_url' in item.keys():
-            image_path = os.path.join(self.IMG_DIR, item["img_url"])
-            image_list = [image_path]
+        if 'img_url' in item.keys() and item['img_url']:
+            image_path = os.path.join(self.IMG_DIR, item["img_url"]) if os.path.isabs(item["img_url"]) == False else item["img_url"]
         else:
             image_path = ""
             image_list = None
