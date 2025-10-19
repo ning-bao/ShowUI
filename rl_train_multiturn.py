@@ -315,22 +315,87 @@ def load_miniwob_items(dataset_dir: str, split: str) -> Tuple[str, List[dict]]:
         actions_raw = item.get("actions", [])
         if not actions_raw or not states:
             continue
-        # Build per-step instructions and targets from actions
-        # Action schema (example): {"action_type": "click", "coords": [x, y], ...}
+        # Build per-step instructions and targets from actions or derive from state
         norm_steps = []
-        img_w, img_h = 160, 210  # default MiniWob viewport size
+        # Try to infer viewport from top-level state if present
+        img_w, img_h = 160, 210
+        try:
+            if isinstance(states, list) and len(states) > 0:
+                root = states[0].get("tree") or states[0]
+                # some schemas store width/height at root
+                rw = root.get("width")
+                rh = root.get("height")
+                if isinstance(rw, (int, float)) and isinstance(rh, (int, float)) and rw > 0 and rh > 0:
+                    img_w, img_h = float(rw), float(rh)
+        except Exception:
+            pass
+
+        def pick_node_from_state(state: dict) -> dict:
+            # Prefer focused node
+            try:
+                tree = state.get("tree") or state
+                # Flatten BFS
+                q = [tree]
+                candidates = []
+                while q:
+                    n = q.pop(0)
+                    if isinstance(n, dict):
+                        if n.get("focused") is True:
+                            return n
+                        candidates.append(n)
+                        for c in n.get("children", []) or []:
+                            q.append(c)
+                # Fallback: first node with clickable-like class
+                for n in candidates:
+                    classes = str(n.get("classes", "")).lower()
+                    if any(k in classes for k in ["button", "link", "click", "reply", "like"]):
+                        return n
+                # Else top-most
+                return candidates[0] if candidates else {}
+            except Exception:
+                return {}
+
         for i, act in enumerate(actions_raw):
             act_type = act.get("action_type", "")
-            coords = act.get("coords", [])
-            # Instruction is task + action type
+            # Flexible coord extraction
+            coords = None
+            for kpair in (("coords", None), ("x", "y"), ("mouseX", "mouseY")):
+                if kpair[1] is None:
+                    v = act.get(kpair[0])
+                    if isinstance(v, (list, tuple)) and len(v) == 2:
+                        coords = [v[0], v[1]]
+                        break
+                else:
+                    x = act.get(kpair[0])
+                    y = act.get(kpair[1])
+                    if isinstance(x, (int, float)) and isinstance(y, (int, float)):
+                        coords = [x, y]
+                        break
+
             instr = f"{task_name} [{act_type}]"
-            if len(coords) == 2:
-                # coords are pixel [x, y]; normalize to [0,1]
-                pt = [min(1.0, max(0.0, float(coords[0]) / img_w)), min(1.0, max(0.0, float(coords[1]) / img_h))]
-            else:
-                pt = None
-            if pt is None:
+            if coords is None:
+                # derive from state
+                st = states[min(i, len(states) - 1)] if len(states) > 0 else {}
+                node = pick_node_from_state(st)
+                try:
+                    left = float(node.get("left", 0.0))
+                    top = float(node.get("top", 0.0))
+                    width = float(node.get("width", 0.0))
+                    height = float(node.get("height", 0.0))
+                    coords = [left + width / 2.0, top + height / 2.0]
+                except Exception:
+                    coords = None
+
+            if coords is None:
                 continue
+
+            try:
+                px = min(1.0, max(0.0, float(coords[0]) / img_w))
+                py = min(1.0, max(0.0, float(coords[1]) / img_h))
+                pt = [px, py]
+            except Exception:
+                continue
+
             # Image: would render from states[i]; placeholder for now
             s_img = f"step_{i}.png"
             norm_steps.append({"instruction": instr, "point": pt, "img_url": s_img})
