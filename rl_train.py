@@ -419,8 +419,7 @@ def build_prompt(processor, element_name: str, image_path: str, min_pixels: int,
         except Exception:
             pass
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    inputs = processor(text=[text], images=[img], padding=True, return_tensors="pt")
-    return text, inputs
+    return text, img
 
 
 def parse_coord(output_text: str, img_size: Tuple[int, int] = None) -> Tuple[float, float]:
@@ -585,20 +584,17 @@ def reinforce_step(model, processor, device, batch, args: RLArgs):
     model.train()
 
     texts: List[str] = []
-    processor_inputs = {}
+    images = []
     meta_list = []
 
     for element_name, image_path, tgt_xy in batch:
-        text, inputs = build_prompt(processor, element_name, image_path, args.min_visual_tokens * 28 * 28, args.max_visual_tokens * 28 * 28)
+        text, img = build_prompt(processor, element_name, image_path, args.min_visual_tokens * 28 * 28, args.max_visual_tokens * 28 * 28)
         texts.append(text)
+        images.append(img)
         meta_list.append((tgt_xy, image_path))
-        # accumulate processor batch
-        for k, v in inputs.items():
-            processor_inputs.setdefault(k, []).append(v)
 
-    # stack batch
-    for k in list(processor_inputs.keys()):
-        processor_inputs[k] = torch.cat(processor_inputs[k], dim=0).to(device)
+    # batch encode with padding to align sequence lengths and image tokens
+    inputs = processor(text=texts, images=images, padding=True, return_tensors="pt").to(device)
 
     # Unwrap DDP for generation if wrapped
     model_unwrapped = model.module if hasattr(model, "module") else model
@@ -609,8 +605,8 @@ def reinforce_step(model, processor, device, batch, args: RLArgs):
         param_dtype = torch.float32
 
     # Cast pixel values to model dtype to avoid dtype-induced NaNs
-    if "pixel_values" in processor_inputs and processor_inputs["pixel_values"] is not None:
-        processor_inputs["pixel_values"] = processor_inputs["pixel_values"].to(dtype=param_dtype)
+    if "pixel_values" in inputs and inputs["pixel_values"] is not None:
+        inputs["pixel_values"] = inputs["pixel_values"].to(dtype=param_dtype)
 
     with torch.no_grad():
         safe_temperature = float(max(args.temperature, 1e-4)) if args.do_sample else 1.0
@@ -631,7 +627,7 @@ def reinforce_step(model, processor, device, batch, args: RLArgs):
             force_greedy = getattr(args, "_global_step", 0) < int(max(0, args.warmup_steps))
             if force_greedy:
                 generated = model_unwrapped.generate(
-                    **processor_inputs,
+                    **inputs,
                     max_new_tokens=int(max(1, args.max_new_tokens)),
                     do_sample=False,
                     num_beams=1,
@@ -640,13 +636,13 @@ def reinforce_step(model, processor, device, batch, args: RLArgs):
                 )
             else:
                 generated = model_unwrapped.generate(
-                    **processor_inputs,
+                    **inputs,
                     **gen_kwargs,
                 )
         except Exception:
             # Fallback to deterministic greedy decoding if sampler fails
             generated = model_unwrapped.generate(
-                **processor_inputs,
+                **inputs,
                 max_new_tokens=int(max(1, args.max_new_tokens)),
                 do_sample=False,
                 num_beams=1,
@@ -656,7 +652,7 @@ def reinforce_step(model, processor, device, batch, args: RLArgs):
 
     # trim prompt tokens
     gen_trimmed = []
-    for in_ids, out_ids in zip(processor_inputs["input_ids"], generated):
+    for in_ids, out_ids in zip(inputs["input_ids"], generated):
         trim = out_ids[len(in_ids) :]
         gen_trimmed.append(trim)
     gen_trimmed = torch.nn.utils.rnn.pad_sequence(gen_trimmed, batch_first=True, padding_value=processor.tokenizer.pad_token_id)
@@ -677,18 +673,18 @@ def reinforce_step(model, processor, device, batch, args: RLArgs):
     rewards_tensor = torch.tensor(rewards, dtype=torch.float32, device=device)
 
     # Build inputs for policy loss (prompt + generated) and labels only on generated tokens
-    input_ids_full = torch.cat([processor_inputs["input_ids"], gen_trimmed], dim=1)
+    input_ids_full = torch.cat([inputs["input_ids"], gen_trimmed], dim=1)
     attention_mask_full = (input_ids_full != processor.tokenizer.pad_token_id).long()
     labels = input_ids_full.clone()
     # mask prompt tokens
-    prompt_len = processor_inputs["input_ids"].shape[1]
+    prompt_len = inputs["input_ids"].shape[1]
     labels[:, :prompt_len] = IGNORE_INDEX
 
     outputs = model(
         input_ids=input_ids_full.to(device),
         attention_mask=attention_mask_full.to(device),
-        pixel_values=processor_inputs.get("pixel_values"),
-        image_grid_thw=processor_inputs.get("image_grid_thw"),
+        pixel_values=inputs.get("pixel_values"),
+        image_grid_thw=inputs.get("image_grid_thw"),
         labels=None,
     )
 
