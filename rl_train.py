@@ -67,6 +67,8 @@ class RLArgs:
     log_hist_every: int = 100
     save_best: bool = True
     warmup_steps: int = 200
+    reward_ema_beta: float = 0.9
+    stats_jsonl: str = ""
 
 
 def set_seed(seed: int) -> None:
@@ -548,7 +550,7 @@ def evaluate_screenspot_subset(processor, model, dataset_dir: str, limit: int, m
 
         messages = [
             {"role":"user","content":[
-                {"type":"text","text":"Based on the screenshot of the page, I give a text description and you give its corresponding location. The coordinate represents a clickable location [x, y] for an element, which is a relative coordinate on the screenshot, scaled from 0 to 1."},
+                {"type":"text","text":"Based on the screenshot of the page, I give a text description and you give its corresponding location. The coordinate represents a clickable location [x, y] for an element, which is a relative coordinate on the screenshot, scaled from 0 to 1. Return exactly two numbers in square brackets like [x, y] with both x and y in [0,1]. Do not include any other text, units, or explanation."},
                 {"type":"image","image":img,"min_pixels":min_pixels,"max_pixels":max_pixels},
                 {"type":"text","text":item["task"]},
             ]}
@@ -702,11 +704,12 @@ def reinforce_step(model, processor, device, batch, args: RLArgs):
     token_mask = (target != processor.tokenizer.pad_token_id).float()
     seq_nll = (nll * token_mask).sum(dim=1) / (token_mask.sum(dim=1) + 1e-6)
 
-    # Advantage normalization
-    adv = rewards_tensor - rewards_tensor.mean()
-    std = rewards_tensor.std(unbiased=False)
-    if float(std.item()) > 1e-6:
-        adv = adv / std
+    # Advantage using EMA baseline/std (robust for small batches)
+    baseline = getattr(args, "_reward_baseline_for_adv", 0.0)
+    std_est = getattr(args, "_reward_std_for_adv", 1.0)
+    adv = rewards_tensor - float(baseline)
+    if float(std_est) > 1e-6:
+        adv = adv / float(std_est)
     else:
         adv = torch.zeros_like(adv)
 
@@ -759,7 +762,22 @@ def reinforce_step(model, processor, device, batch, args: RLArgs):
     except Exception:
         pass
 
-    return loss, float(rewards_tensor.mean().item()), float(entropy_mean.item()), float(kl_loss.item()), sample_pairs
+    # Step stats for JSONL logging
+    try:
+        invalid_rate = ((rewards_tensor <= -0.999).float().mean().item())
+    except Exception:
+        invalid_rate = 0.0
+    step_stats = {
+        "reward_mean": float(rewards_tensor.mean().item()),
+        "reward_min": float(rewards_tensor.min().item()),
+        "reward_max": float(rewards_tensor.max().item()),
+        "adv_mean": float(adv.mean().item()),
+        "adv_std": float(adv.std(unbiased=False).item()),
+        "seq_nll_mean": float(seq_nll.mean().item()),
+        "invalid_rate": float(invalid_rate),
+    }
+
+    return loss, float(rewards_tensor.mean().item()), float(entropy_mean.item()), float(kl_loss.item()), sample_pairs, step_stats
 
 
 def main():
@@ -805,6 +823,7 @@ def main():
     parser.add_argument("--log_hist_every", type=int, default=100)
     parser.add_argument("--save_best", action="store_true")
     parser.add_argument("--warmup_steps", type=int, default=200)
+    parser.add_argument("--stats_jsonl", type=str, default="", help="Path to JSONL file to append per-step stats")
     args_ns = parser.parse_args()
 
     args = RLArgs(
@@ -847,6 +866,7 @@ def main():
         log_hist_every=args_ns.log_hist_every,
         save_best=args_ns.save_best,
         warmup_steps=args_ns.warmup_steps,
+        stats_jsonl=args_ns.stats_jsonl,
     )
 
     set_seed(args.seed)
@@ -970,6 +990,9 @@ def main():
     if global_rank == 0:
         os.makedirs(args.log_dir, exist_ok=True)
         writer = SummaryWriter(log_dir=args.log_dir)
+    # running baseline stats for batch_size=1 stability
+    reward_baseline = 0.0
+    reward_var = 1e-6
 
     # Utility: epoch-wise shuffled iterator over samples
     def sample_epoch_iterator(all_samples):
@@ -1041,7 +1064,7 @@ def main():
                 if not batch_items:
                     continue
 
-                loss_tensor, reward, ent, kl, sample_pairs = reinforce_step(model, processor, device, batch_items, args)
+                loss_tensor, reward, ent, kl, sample_pairs, step_stats = reinforce_step(model, processor, device, batch_items, args)
                 (loss_tensor / max(1, args.grad_accum_steps)).backward()
                 accum_loss += float(loss_tensor.item())
                 accum_reward += reward
@@ -1061,18 +1084,70 @@ def main():
             running_entropy += ent
             running_kl += kl
             pbar.set_postfix({"loss": f"{loss:.4f}", "reward": f"{reward:.3f}", "H": f"{ent:.3f}", "KL": f"{kl:.3f}"})
+
+            # running baseline diagnostics (always update EMA for advantage, even without writer)
+            try:
+                reward_baseline = args.reward_ema_beta * reward_baseline + (1.0 - args.reward_ema_beta) * reward
+                diff = reward - reward_baseline
+                reward_var = args.reward_ema_beta * reward_var + (1.0 - args.reward_ema_beta) * (diff * diff)
+                # expose EMA baseline/std for advantage computation
+                try:
+                    object.__setattr__(args, "_reward_baseline_for_adv", float(reward_baseline))
+                    object.__setattr__(args, "_reward_std_for_adv", math.sqrt(max(1e-8, reward_var)))
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
             if writer:
                 writer.add_scalar("train/loss", loss, global_step)
                 writer.add_scalar("train/reward", reward, global_step)
                 writer.add_scalar("train/entropy", ent, global_step)
                 if args.kl_coef > 0.0:
                     writer.add_scalar("train/kl", kl, global_step)
+                # log EMA baseline/std to TB
+                try:
+                    writer.add_scalar("train/reward_baseline", reward_baseline, global_step)
+                    writer.add_scalar("train/reward_std", math.sqrt(max(1e-8, reward_var)), global_step)
+                except Exception:
+                    pass
                 # invalid parse rate approximation: 1.0 if reward == -1 and seq_nll finite
                 try:
                     invalid_rate = 1.0 if reward <= -0.999 else 0.0
                     writer.add_scalar("train/invalid_parse_rate", invalid_rate, global_step)
                 except Exception:
                     pass
+
+            # Append per-step stats to JSONL if requested
+            try:
+                if args.stats_jsonl:
+                    rec = {
+                        "type": "train_step",
+                        "step": int(global_step),
+                        "epoch": int(epoch),
+                        "time": float(time.time()),
+                        "loss": float(loss),
+                        "entropy_mean": float(ent),
+                        "kl": float(kl),
+                        "reward_mean": float(reward),
+                        "reward_baseline": float(reward_baseline),
+                        "reward_std_ema": float(math.sqrt(max(1e-8, reward_var))),
+                        "adv_mean": float(step_stats.get("adv_mean", 0.0)),
+                        "adv_std": float(step_stats.get("adv_std", 0.0)),
+                        "seq_nll_mean": float(step_stats.get("seq_nll_mean", 0.0)),
+                        "invalid_rate": float(step_stats.get("invalid_rate", 0.0)),
+                        "temperature": float(args.temperature),
+                        "tau_success": float(args.tau_success),
+                        "entropy_coef": float(args.entropy_coef_start),
+                        "lr": float(optimizer.param_groups[0].get("lr", 0.0)),
+                    }
+                    dname = os.path.dirname(os.path.abspath(args.stats_jsonl))
+                    if dname:
+                        os.makedirs(dname, exist_ok=True)
+                    with open(args.stats_jsonl, "a") as f:
+                        f.write(json.dumps(rec) + "\n")
+            except Exception:
+                pass
 
             # periodic subset eval
             if ((global_step + 1) % args.eval_every_steps == 0):
@@ -1081,6 +1156,26 @@ def main():
                 sr = evaluate_screenspot_subset(processor, model, args.dataset_dir, args.eval_subset_limit, min_pixels, max_pixels, device)
                 if writer:
                     writer.add_scalar("eval/screenspot_subset_success", sr, global_step)
+                # Append eval record
+                try:
+                    if args.stats_jsonl:
+                        rec = {
+                            "type": "eval",
+                            "step": int(global_step),
+                            "epoch": int(epoch),
+                            "time": float(time.time()),
+                            "eval_subset_success": float(sr),
+                            "eval_subset_limit": int(args.eval_subset_limit),
+                            "min_visual_tokens": int(args.min_visual_tokens),
+                            "max_visual_tokens": int(args.max_visual_tokens),
+                        }
+                        dname = os.path.dirname(os.path.abspath(args.stats_jsonl))
+                        if dname:
+                            os.makedirs(dname, exist_ok=True)
+                        with open(args.stats_jsonl, "a") as f:
+                            f.write(json.dumps(rec) + "\n")
+                except Exception:
+                    pass
                 if args.save_best and sr > best_sr:
                     best_sr = sr
                     save_dir = os.path.join(os.getcwd(), f"rl_ckpt_best")
