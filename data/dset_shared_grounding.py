@@ -15,6 +15,7 @@ from data.template import grounding_to_qwen, batch_add_answer, batch_add_answer_
 
 dataset_mapping = {
     "showui-desktop": "ShowUI-desktop",
+    "showui-desktop-rl": "ShowUI-desktop-RL",
     "showui-web": "ShowUI-web",
     "amex": "AMEX",
     "rico": "RICO",
