@@ -9,7 +9,7 @@ import random
 import re
 import numpy as np
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List, Tuple, Optional, Set
 
 import torch
 import torch.nn.functional as F
@@ -69,6 +69,9 @@ class RLArgs:
     warmup_steps: int = 200
     reward_ema_beta: float = 0.9
     stats_jsonl: str = ""
+    # Eval filters
+    eval_envs: Optional[List[str]] = None
+    eval_types: Optional[List[str]] = None
 
 
 def set_seed(seed: int) -> None:
@@ -520,7 +523,7 @@ def compute_reward(pred_xy: Tuple[float, float], tgt_xy: Tuple[float, float], ta
 
 
 @torch.no_grad()
-def evaluate_screenspot_subset(processor, model, dataset_dir: str, limit: int, min_pixels: int, max_pixels: int, device: str) -> float:
+def evaluate_screenspot_subset(processor, model, dataset_dir: str, limit: int, min_pixels: int, max_pixels: int, device: str, envs: Optional[Set[str]] = None, types: Optional[Set[str]] = None) -> float:
     """Lightweight subset eval on ScreenSpot. Returns success rate in [0,1]."""
     meta_path = os.path.join(dataset_dir, "ScreenSpot", "metadata", "hf_test_full.json")
     if not os.path.exists(meta_path):
@@ -530,6 +533,23 @@ def evaluate_screenspot_subset(processor, model, dataset_dir: str, limit: int, m
             items = json.load(f)
     except Exception:
         return 0.0
+
+    # Desktop-focused default: if no filters provided, prefer desktop-only for fidelity/speed
+    if envs is None:
+        envs = {"desktop"}
+    else:
+        envs = {e.lower() for e in envs}
+    if types is not None:
+        types = {t.lower() for t in types}
+
+    if envs or types:
+        def _keep(it: dict) -> bool:
+            if envs is not None and str(it.get("split", "")).lower() not in envs:
+                return False
+            if types is not None and str(it.get("data_type", "")).lower() not in types:
+                return False
+            return True
+        items = [it for it in items if _keep(it)]
 
     N = min(limit, len(items)) if limit and limit > 0 else len(items)
     if N == 0:
@@ -725,8 +745,8 @@ def reinforce_step(model, processor, device, batch, args: RLArgs):
             ref_logits = args._ref_logits_fn(
                 input_ids=input_ids_full.to(device),
                 attention_mask=attention_mask_full.to(device),
-                pixel_values=processor_inputs.get("pixel_values"),
-                image_grid_thw=processor_inputs.get("image_grid_thw"),
+                pixel_values=inputs.get("pixel_values"),
+                image_grid_thw=inputs.get("image_grid_thw"),
             )
         ref_logits = ref_logits[:, prompt_len - 1 : -1, :].contiguous()
         ref_log_probs = F.log_softmax(ref_logits, dim=-1)
@@ -815,6 +835,8 @@ def main():
     parser.add_argument("--resume_from", type=str, default="", help="Resume from checkpoint directory")
     parser.add_argument("--save_optimizer", action="store_true")
     parser.add_argument("--eval_split", type=str, default="hf_test_full")
+    parser.add_argument("--eval_envs", type=str, nargs="*", default=["desktop"], help="Eval environment filter, e.g., desktop mobile web")
+    parser.add_argument("--eval_types", type=str, nargs="*", default=None, help="Eval data types filter, e.g., icon text")
     parser.add_argument("--log_samples_every", type=int, default=100)
     parser.add_argument("--log_hist_every", type=int, default=100)
     parser.add_argument("--save_best", action="store_true")
@@ -863,6 +885,8 @@ def main():
         save_best=args_ns.save_best,
         warmup_steps=args_ns.warmup_steps,
         stats_jsonl=args_ns.stats_jsonl,
+        eval_envs=args_ns.eval_envs,
+        eval_types=args_ns.eval_types,
     )
 
     set_seed(args.seed)
@@ -1149,7 +1173,11 @@ def main():
             if ((global_step + 1) % args.eval_every_steps == 0):
                 min_pixels = args.min_visual_tokens * 28 * 28
                 max_pixels = args.max_visual_tokens * 28 * 28
-                sr = evaluate_screenspot_subset(processor, model, args.dataset_dir, args.eval_subset_limit, min_pixels, max_pixels, device)
+                sr = evaluate_screenspot_subset(
+                    processor, model, args.dataset_dir, args.eval_subset_limit, min_pixels, max_pixels, device,
+                    envs=set(args.eval_envs) if args.eval_envs else None,
+                    types=set(args.eval_types) if args.eval_types else None,
+                )
                 if writer:
                     writer.add_scalar("eval/screenspot_subset_success", sr, global_step)
                 # Append eval record
@@ -1209,7 +1237,11 @@ def main():
         # end-of-epoch eval on subset
         min_pixels = args.min_visual_tokens * 28 * 28
         max_pixels = args.max_visual_tokens * 28 * 28
-        sr = evaluate_screenspot_subset(processor, model, args.dataset_dir, args.eval_subset_limit, min_pixels, max_pixels, device)
+        sr = evaluate_screenspot_subset(
+            processor, model, args.dataset_dir, args.eval_subset_limit, min_pixels, max_pixels, device,
+            envs=set(args.eval_envs) if args.eval_envs else None,
+            types=set(args.eval_types) if args.eval_types else None,
+        )
         if writer:
             writer.add_scalar("eval/screenspot_subset_success_epoch", sr, epoch)
         print(f"Epoch {epoch+1} eval subset success: {sr:.4f}")

@@ -8,6 +8,7 @@ import ast
 import re
 import json
 import argparse
+from typing import List, Dict, Any, Optional, Set
 import torch
 from tqdm import tqdm
 from PIL import Image
@@ -39,13 +40,15 @@ def parse_coord(output_text):
 def evaluate_screenspot(
     processor,
     model,
-    dataset_dir,
-    split="hf_test_full",
-    min_pixels=256 * 28 * 28,
-    max_pixels=1344 * 28 * 28,
-    device="cuda",
-    limit=None,
-):
+    dataset_dir: str,
+    split: str = "hf_test_full",
+    min_pixels: int = 256 * 28 * 28,
+    max_pixels: int = 1344 * 28 * 28,
+    device: str = "cuda",
+    limit: Optional[int] = None,
+    envs: Optional[Set[str]] = None,
+    types: Optional[Set[str]] = None,
+) -> Dict[str, Dict[str, List[dict]]]:
     """
     Evaluate on ScreenSpot dataset.
     Returns dict: {split_name: {data_type: [sample_results], ...}, ...}
@@ -57,8 +60,24 @@ def evaluate_screenspot(
     with open(meta_path) as f:
         items = json.load(f)
 
+    # Optional filtering by environment (item['split']) and type (item['data_type'])
+    if envs:
+        envs = {e.lower() for e in envs}
+    if types:
+        types = {t.lower() for t in types}
+
+    def _keep(it: dict) -> bool:
+        if envs is not None and str(it.get("split", "")).lower() not in envs:
+            return False
+        if types is not None and str(it.get("data_type", "")).lower() not in types:
+            return False
+        return True
+
+    if envs is not None or types is not None:
+        items = [it for it in items if _keep(it)]
+
     N = min(limit, len(items)) if limit and limit > 0 else len(items)
-    print(f"Evaluating {N} samples from ScreenSpot/{split}")
+    print(f"Evaluating {N} samples from ScreenSpot/{split}" + (f" | envs={sorted(list(envs)) if envs else 'all'} types={sorted(list(types)) if types else 'all'}"))
 
     model.eval()
     results = {}
@@ -167,6 +186,20 @@ def main():
     parser.add_argument("--min_visual_tokens", type=int, default=256, help="Min visual tokens")
     parser.add_argument("--max_visual_tokens", type=int, default=1344, help="Max visual tokens")
     parser.add_argument("--output", type=str, default="eval_results.json", help="Output JSON file for results")
+    parser.add_argument(
+        "--envs",
+        type=str,
+        nargs="*",
+        default=None,
+        help="Environment filter by item.split (e.g., desktop mobile web). Default: all",
+    )
+    parser.add_argument(
+        "--types",
+        type=str,
+        nargs="*",
+        default=None,
+        help="Data type filter by item.data_type (e.g., icon text). Default: all",
+    )
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -188,6 +221,8 @@ def main():
         max_pixels=max_pixels,
         device=device,
         limit=args.limit,
+        envs=set(args.envs) if args.envs else None,
+        types=set(args.types) if args.types else None,
     )
 
     metrics = compute_metrics(results)
@@ -199,7 +234,14 @@ def main():
             print(f"  {data_type}: {m['success_rate']:.4f} ({m['total']} samples)")
 
     # Save detailed results
-    output_data = {"model_id": args.model_id, "split": args.split, "metrics": metrics, "results": results}
+    output_data = {
+        "model_id": args.model_id,
+        "split": args.split,
+        "envs": args.envs,
+        "types": args.types,
+        "metrics": metrics,
+        "results": results,
+    }
     with open(args.output, "w") as f:
         json.dump(output_data, f, indent=2)
     print(f"\nSaved detailed results to {args.output}")

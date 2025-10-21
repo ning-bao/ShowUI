@@ -2,6 +2,7 @@ import os
 import ast
 import json
 import argparse
+from typing import Optional, Set
 import torch
 from tqdm import tqdm
 from PIL import Image
@@ -21,6 +22,8 @@ def main():
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for batched generation")
     parser.add_argument("--max_new_tokens", type=int, default=64, help="Max new tokens during generation")
     parser.add_argument("--compile", action="store_true", help="Use torch.compile for model (GPU/PyTorch 2.1+)")
+    parser.add_argument("--envs", type=str, nargs="*", default=None, help="Environment filter: e.g., desktop mobile web")
+    parser.add_argument("--types", type=str, nargs="*", default=None, help="Data type filter: e.g., icon text")
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -58,6 +61,20 @@ def main():
     meta_path = os.path.join(args.dataset_dir, "ScreenSpot", "metadata", f"{args.split}.json")
     with open(meta_path) as f:
         items = json.load(f)
+    envs: Optional[Set[str]] = set(args.envs) if args.envs else None
+    types: Optional[Set[str]] = set(args.types) if args.types else None
+    if envs:
+        envs = {e.lower() for e in envs}
+    if types:
+        types = {t.lower() for t in types}
+    if envs or types:
+        def _keep(it: dict) -> bool:
+            if envs is not None and str(it.get("split", "")).lower() not in envs:
+                return False
+            if types is not None and str(it.get("data_type", "")).lower() not in types:
+                return False
+            return True
+        items = [it for it in items if _keep(it)]
 
     N = min(args.limit, len(items))
     ok = 0

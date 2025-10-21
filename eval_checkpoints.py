@@ -18,7 +18,7 @@ import re
 import ast
 import json
 import argparse
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Tuple, Any, Optional, Set
 
 import torch
 from tqdm import tqdm
@@ -46,12 +46,26 @@ def parse_coord(output_text: str) -> Tuple[float, float]:
     return float("nan"), float("nan")
 
 
-def load_screenspot_items(dataset_dir: str, split: str) -> List[dict]:
+def load_screenspot_items(dataset_dir: str, split: str, envs: Optional[Set[str]] = None, types: Optional[Set[str]] = None) -> List[dict]:
     meta_path = os.path.join(dataset_dir, "ScreenSpot", "metadata", f"{split}.json")
     if not os.path.exists(meta_path):
         raise FileNotFoundError(f"ScreenSpot metadata not found: {meta_path}")
     with open(meta_path) as f:
         items = json.load(f)
+
+    # Optional filtering by environment and type
+    if envs:
+        envs = {e.lower() for e in envs}
+    if types:
+        types = {t.lower() for t in types}
+    if envs or types:
+        def _keep(it: dict) -> bool:
+            if envs is not None and str(it.get("split", "")).lower() not in envs:
+                return False
+            if types is not None and str(it.get("data_type", "")).lower() not in types:
+                return False
+            return True
+        items = [it for it in items if _keep(it)]
     return items
 
 
@@ -212,6 +226,8 @@ def evaluate_checkpoint(
     min_pixels: int,
     max_pixels: int,
     limit: int = None,
+    envs: Optional[Set[str]] = None,
+    types: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     """Load processor+model from checkpoint_dir and evaluate on ScreenSpot split."""
     processor = AutoProcessor.from_pretrained(
@@ -225,7 +241,7 @@ def evaluate_checkpoint(
         device_map="auto",
     )
 
-    items = load_screenspot_items(dataset_dir, split)
+    items = load_screenspot_items(dataset_dir, split, envs=envs, types=types)
     results = evaluate_screenspot_items(
         processor=processor,
         model=model,
@@ -251,6 +267,8 @@ def main():
     parser.add_argument("--min_visual_tokens", type=int, default=256, help="Min visual tokens")
     parser.add_argument("--max_visual_tokens", type=int, default=1344, help="Max visual tokens")
     parser.add_argument("--output", type=str, default="eval_checkpoints_results.json", help="Output JSON path")
+    parser.add_argument("--envs", type=str, nargs="*", default=None, help="Environment filter: e.g., desktop mobile web")
+    parser.add_argument("--types", type=str, nargs="*", default=None, help="Data type filter: e.g., icon text")
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -297,6 +315,8 @@ def main():
                 min_pixels=min_pixels,
                 max_pixels=max_pixels,
                 limit=args.limit,
+                envs=set(args.envs) if args.envs else None,
+                types=set(args.types) if args.types else None,
             )
             all_results["checkpoints"][ck_dir] = res
             overall_sr = res["metrics"].get("overall", {}).get("success_rate", 0.0)
