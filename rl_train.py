@@ -72,6 +72,21 @@ class RLArgs:
     # Eval filters
     eval_envs: Optional[List[str]] = None
     eval_types: Optional[List[str]] = None
+    # Stability / control
+    max_grad_norm: float = 1.0
+    adv_clip: float = 3.0
+    # Adaptive KL control
+    target_kl: float = 0.1
+    kl_adapt_rate: float = 1.5
+    kl_adapt_every: int = 50
+    min_kl_coef: float = 0.0
+    max_kl_coef: float = 0.5
+    # Safety cooldown (force greedy temporarily)
+    safety_cooldown_steps: int = 0
+    safety_entropy_threshold: float = 3.0
+    safety_kl_multiplier: float = 5.0
+    safety_temp_floor: float = 0.3
+    safety_temp_decay: float = 0.5
 
 
 def set_seed(seed: int) -> None:
@@ -645,6 +660,12 @@ def reinforce_step(model, processor, device, batch, args: RLArgs):
         try:
             # Warmup: force greedy decoding for first N steps to reduce invalid parses
             force_greedy = getattr(args, "_global_step", 0) < int(max(0, args.warmup_steps))
+            # Safety cooldown override
+            try:
+                if getattr(args, "_force_greedy_steps", 0) and int(getattr(args, "_force_greedy_steps", 0)) > 0:
+                    force_greedy = True
+            except Exception:
+                pass
             if force_greedy:
                 generated = model_unwrapped.generate(
                     **inputs,
@@ -728,6 +749,12 @@ def reinforce_step(model, processor, device, batch, args: RLArgs):
         adv = adv / float(std_est)
     else:
         adv = torch.zeros_like(adv)
+    # Advantage clamp for stability
+    try:
+        if getattr(args, "adv_clip", 0.0) and float(args.adv_clip) > 0.0:
+            adv = torch.clamp(adv, -float(args.adv_clip), float(args.adv_clip))
+    except Exception:
+        pass
 
     # Entropy bonus on generated tokens
     log_probs = F.log_softmax(logits, dim=-1)
@@ -842,6 +869,21 @@ def main():
     parser.add_argument("--save_best", action="store_true")
     parser.add_argument("--warmup_steps", type=int, default=200)
     parser.add_argument("--stats_jsonl", type=str, default="", help="Path to JSONL file to append per-step stats")
+    # Stability / control args
+    parser.add_argument("--max_grad_norm", type=float, default=1.0)
+    parser.add_argument("--adv_clip", type=float, default=3.0)
+    # Adaptive KL args
+    parser.add_argument("--target_kl", type=float, default=0.1)
+    parser.add_argument("--kl_adapt_rate", type=float, default=1.5)
+    parser.add_argument("--kl_adapt_every", type=int, default=50)
+    parser.add_argument("--min_kl_coef", type=float, default=0.0)
+    parser.add_argument("--max_kl_coef", type=float, default=0.5)
+    # Safety cooldown
+    parser.add_argument("--safety_cooldown_steps", type=int, default=0)
+    parser.add_argument("--safety_entropy_threshold", type=float, default=3.0)
+    parser.add_argument("--safety_kl_multiplier", type=float, default=5.0)
+    parser.add_argument("--safety_temp_floor", type=float, default=0.3)
+    parser.add_argument("--safety_temp_decay", type=float, default=0.5)
     args_ns = parser.parse_args()
 
     args = RLArgs(
@@ -887,6 +929,18 @@ def main():
         stats_jsonl=args_ns.stats_jsonl,
         eval_envs=args_ns.eval_envs,
         eval_types=args_ns.eval_types,
+        max_grad_norm=args_ns.max_grad_norm,
+        adv_clip=args_ns.adv_clip,
+        target_kl=args_ns.target_kl,
+        kl_adapt_rate=args_ns.kl_adapt_rate,
+        kl_adapt_every=args_ns.kl_adapt_every,
+        min_kl_coef=args_ns.min_kl_coef,
+        max_kl_coef=args_ns.max_kl_coef,
+        safety_cooldown_steps=args_ns.safety_cooldown_steps,
+        safety_entropy_threshold=args_ns.safety_entropy_threshold,
+        safety_kl_multiplier=args_ns.safety_kl_multiplier,
+        safety_temp_floor=args_ns.safety_temp_floor,
+        safety_temp_decay=args_ns.safety_temp_decay,
     )
 
     set_seed(args.seed)
@@ -1091,7 +1145,7 @@ def main():
                 accum_entropy += ent
                 accum_kl += kl
 
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), float(getattr(args, "max_grad_norm", 1.0)))
             optimizer.step()
 
             loss = accum_loss / max(1, args.grad_accum_steps)
@@ -1103,7 +1157,45 @@ def main():
             running_reward += reward
             running_entropy += ent
             running_kl += kl
-            pbar.set_postfix({"loss": f"{loss:.4f}", "reward": f"{reward:.3f}", "H": f"{ent:.3f}", "KL": f"{kl:.3f}"})
+            pbar.set_postfix({"loss": f"{loss:.4f}", "reward": f"{reward:.3f}", "H": f"{ent:.3f}", "KL": f"{kl:.3f}", "klc": f"{args.kl_coef:.3g}"})
+
+            # Adaptive KL controller
+            try:
+                if int(getattr(args, "kl_adapt_every", 0)) > 0 and ((global_step + 1) % int(getattr(args, "kl_adapt_every", 0)) == 0):
+                    target = float(getattr(args, "target_kl", 0.0))
+                    rate = float(getattr(args, "kl_adapt_rate", 1.0))
+                    if target > 0.0 and rate > 1.0:
+                        new_coef = float(args.kl_coef)
+                        if kl > target * 1.3:
+                            new_coef = new_coef * rate if new_coef > 0.0 else max(1e-4, float(getattr(args, "min_kl_coef", 0.0)))
+                        elif kl < target / 1.3:
+                            new_coef = new_coef / rate
+                        # clamp
+                        lo = float(getattr(args, "min_kl_coef", 0.0))
+                        hi = float(getattr(args, "max_kl_coef", 1.0))
+                        new_coef = min(hi, max(lo, new_coef))
+                        object.__setattr__(args, "kl_coef", float(new_coef))
+            except Exception:
+                pass
+
+            # Safety cooldown (detect meltdown)
+            try:
+                if int(getattr(args, "safety_cooldown_steps", 0)) > 0:
+                    meltdown = False
+                    if ent > float(getattr(args, "safety_entropy_threshold", 3.0)):
+                        meltdown = True
+                    target = float(getattr(args, "target_kl", 0.0))
+                    mult = float(getattr(args, "safety_kl_multiplier", 5.0))
+                    if target > 0.0 and kl > target * mult:
+                        meltdown = True
+                    if meltdown:
+                        steps = int(max(int(getattr(args, "_force_greedy_steps", 0)), int(getattr(args, "safety_cooldown_steps", 0))))
+                        object.__setattr__(args, "_force_greedy_steps", steps)
+                        # reduce temperature aggressively for future steps
+                        new_temp = max(float(getattr(args, "safety_temp_floor", 0.3)), float(args.temperature) * float(getattr(args, "safety_temp_decay", 0.5)))
+                        object.__setattr__(args, "temperature", float(new_temp))
+            except Exception:
+                pass
 
             # running baseline diagnostics (always update EMA for advantage, even without writer)
             try:
@@ -1125,6 +1217,11 @@ def main():
                 writer.add_scalar("train/entropy", ent, global_step)
                 if args.kl_coef > 0.0:
                     writer.add_scalar("train/kl", kl, global_step)
+                try:
+                    writer.add_scalar("train/kl_coef", float(args.kl_coef), global_step)
+                    writer.add_scalar("train/force_greedy_steps", float(getattr(args, "_force_greedy_steps", 0)), global_step)
+                except Exception:
+                    pass
                 # log EMA baseline/std to TB
                 try:
                     writer.add_scalar("train/reward_baseline", reward_baseline, global_step)
@@ -1160,6 +1257,8 @@ def main():
                         "tau_success": float(args.tau_success),
                         "entropy_coef": float(args.entropy_coef_start),
                         "lr": float(optimizer.param_groups[0].get("lr", 0.0)),
+                        "kl_coef": float(args.kl_coef),
+                        "force_greedy_steps": int(getattr(args, "_force_greedy_steps", 0)),
                     }
                     dname = os.path.dirname(os.path.abspath(args.stats_jsonl))
                     if dname:
