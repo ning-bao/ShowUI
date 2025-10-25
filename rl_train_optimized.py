@@ -481,13 +481,21 @@ def compute_reward(pred_xy: Tuple[float,float], tgt_xy: Tuple[float,float], tau:
 class XYFSM:
     def __init__(self, tokenizer):
         self.tok = tokenizer
-        # attempt to map common tokens; fallback to ids via strings
-        self._id = lambda s: self.tok.convert_tokens_to_ids(s) if s in self.tok.get_vocab() else None
-        self.space_id = self._id(' ')
-        self.comma_id = self._id(',')
-        self.lbr_id = self._id('[')
-        self.rbr_id = self._id(']')
-        # numeric ids (best-effort): many tokenizers have multi-char pieces; we'll allow any token containing these chars
+        # Build robust sets by scanning vocab for substrings (since many tokenizers use multi-char pieces)
+        self.vocab = self.tok.get_vocab()
+        def ids_with(chars: str):
+            wanted = set()
+            for tok, idx in self.vocab.items():
+                if any(ch in tok for ch in chars):
+                    wanted.add(idx)
+            return wanted
+        self.lbr_set = ids_with('[')
+        self.rbr_set = ids_with(']')
+        self.comma_set = ids_with(',')
+        self.space_set = ids_with(' ')
+        self.digit_set = ids_with('0123456789-+.')
+        self.eos_id = self.tok.eos_token_id
+        self.fallback_all = set(self.vocab.values())
         self.reset()
 
     def reset(self):
@@ -500,27 +508,27 @@ class XYFSM:
         txt = normalize_fullwidth(txt)
         if self.state == 'S0':
             self.state = 'Sx' if '[' in txt else 'S0'
-            return set([self.lbr_id]) if self.lbr_id is not None else set()
+            # If we can find any '['-containing tokens, constrain to them; otherwise, don't constrain at all
+            return set(self.lbr_set) if len(self.lbr_set) > 0 else set(self.fallback_all)
         if self.state == 'Sx':
             if ']' in txt: self.state = 'Sdone'
             if ',' in txt: self.state = 'Sy'
             # allow digits, dot, sign, comma, space
             allowed: Set[int] = set()
-            vocab = self.tok.get_vocab()
-            for tok, idx in vocab.items():
-                if any(ch in tok for ch in list('0123456789-+.' )) or tok in [',',' ',']']:
-                    allowed.add(idx)
-            return allowed
+            allowed |= self.digit_set
+            allowed |= self.comma_set
+            allowed |= self.space_set
+            allowed |= self.rbr_set
+            return allowed if len(allowed) > 0 else set(self.fallback_all)
         if self.state == 'Sy':
             if ']' in txt: self.state = 'Sdone'
             allowed: Set[int] = set()
-            vocab = self.tok.get_vocab()
-            for tok, idx in vocab.items():
-                if any(ch in tok for ch in list('0123456789-+.')) or tok in [' ',']']:
-                    allowed.add(idx)
-            return allowed
+            allowed |= self.digit_set
+            allowed |= self.space_set
+            allowed |= self.rbr_set
+            return allowed if len(allowed) > 0 else set(self.fallback_all)
         if self.state == 'Sdone':
-            return set([self.tok.eos_token_id]) if self.tok.eos_token_id is not None else set()
+            return set([self.eos_id]) if self.eos_id is not None else set(self.fallback_all)
         return set()
 
 
@@ -667,10 +675,11 @@ def reinforce_step(model, processor, device, batch, args, ref_logits_fn=None):
         "eos_token_id": processor.tokenizer.eos_token_id,
         "use_cache": True,
     }
-    if args.top_p and args.top_p > 0.0:
-        gen_kwargs["top_p"] = float(min(1.0, max(1e-6, args.top_p)))
-    if args.top_k and args.top_k > 0:
-        gen_kwargs["top_k"] = int(max(1, args.top_k))
+    if gen_kwargs["do_sample"]:
+        if args.top_p and args.top_p > 0.0:
+            gen_kwargs["top_p"] = float(min(1.0, max(1e-6, args.top_p)))
+        if args.top_k and args.top_k > 0:
+            gen_kwargs["top_k"] = int(max(1, args.top_k))
 
     # Optional prefix constraint
     prefix_allowed_tokens_fn = None
@@ -697,11 +706,18 @@ def reinforce_step(model, processor, device, batch, args, ref_logits_fn=None):
             )
 
     # Trim prompt
+    pad_id = processor.tokenizer.pad_token_id
+    if pad_id is None:
+        # Many causal LMs use EOS as PAD; ensures masks are well-defined
+        pad_id = processor.tokenizer.eos_token_id
+        if pad_id is None:
+            # Last resort
+            pad_id = 0
     gen_trimmed = []
     for in_ids, out_ids in zip(inputs["input_ids"], generated):
         gen_trimmed.append(out_ids[len(in_ids):])
     gen_trimmed = torch.nn.utils.rnn.pad_sequence(gen_trimmed, batch_first=True,
-                                                  padding_value=processor.tokenizer.pad_token_id)
+                                                  padding_value=pad_id)
 
     # Decode, compute rewards
     decoded = processor.batch_decode(gen_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
@@ -729,7 +745,7 @@ def reinforce_step(model, processor, device, batch, args, ref_logits_fn=None):
 
     # Prepare inputs for re-scoring
     input_ids_full = torch.cat([inputs["input_ids"], gen_trimmed], dim=1)
-    attention_mask_full = (input_ids_full != processor.tokenizer.pad_token_id).long()
+    attention_mask_full = (input_ids_full != pad_id).long()
     labels = input_ids_full.clone()
     prompt_len = inputs["input_ids"].shape[1]
     labels[:, :prompt_len] = IGNORE_INDEX
@@ -754,9 +770,14 @@ def reinforce_step(model, processor, device, batch, args, ref_logits_fn=None):
     coord_mask = torch.stack(coord_masks, dim=0).to(logits.device)
 
     token_ce = F.cross_entropy(logits.view(-1, V), target.view(-1), reduction="none").view_as(coord_mask)
-    token_mask = (target != processor.tokenizer.pad_token_id).float()
+    token_mask = (target != pad_id).float()
 
     # restrict loss to coord tokens (and valid positions)
+    # Fallback: if no coord tokens detected for a sample, use all non-pad generated tokens
+    coord_mask = coord_mask.to(logits.device)
+    no_coord = (coord_mask.sum(dim=1) == 0)
+    if no_coord.any():
+        coord_mask[no_coord] = token_mask[no_coord]
     active_mask = (coord_mask * token_mask)
     seq_loss = (token_ce * active_mask).sum(dim=1) / (active_mask.sum(dim=1) + 1e-6)
 
