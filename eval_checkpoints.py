@@ -46,10 +46,87 @@ def parse_coord(output_text: str) -> Tuple[float, float]:
     return float("nan"), float("nan")
 
 
-def load_screenspot_items(dataset_dir: str, split: str, envs: Optional[Set[str]] = None, types: Optional[Set[str]] = None) -> List[dict]:
+def resolve_screenspot_paths(dataset_dir: str, split: str, dataset_variant: Optional[str] = None) -> Tuple[str, Optional[str]]:
+    """Resolve metadata path and images root, handling V1/V2/Pro layouts.
+    Returns (metadata_path, images_root). images_root may be None if not found.
+    """
+    # If explicit variant provided, try that first
+    if dataset_variant:
+        explicit_meta = os.path.join(dataset_dir, dataset_variant, "metadata", f"{split}.json")
+        if os.path.exists(explicit_meta):
+            variant_root = os.path.dirname(os.path.dirname(explicit_meta))
+            images_root = os.path.join(variant_root, "images")
+            if not os.path.isdir(images_root):
+                for img_dir in ["image", "imgs", "Images", "IMAGES"]:
+                    alt = os.path.join(variant_root, img_dir)
+                    if os.path.isdir(alt):
+                        images_root = alt
+                        break
+                else:
+                    images_root = None
+            return explicit_meta, images_root
+
+    # Fast-path common layout
     meta_path = os.path.join(dataset_dir, "ScreenSpot", "metadata", f"{split}.json")
-    if not os.path.exists(meta_path):
-        raise FileNotFoundError(f"ScreenSpot metadata not found: {meta_path}")
+    if os.path.exists(meta_path):
+        variant_root = os.path.dirname(os.path.dirname(meta_path))  # .../ScreenSpot
+        images_root = os.path.join(variant_root, "images")
+        return meta_path, images_root if os.path.isdir(images_root) else None
+
+    # Try common alternative variant folder names
+    candidate_roots = [
+        "ScreenSpotV2",
+        "ScreenSpot-v2",
+        "ScreenSpotV1",
+        "ScreenSpot-v1",
+        "ScreenSpotPro",
+        "ScreenSpot-Pro",
+        "ScreenSpot_Pro",
+        "ScreenSpot",
+    ]
+    for name in candidate_roots:
+        mp = os.path.join(dataset_dir, name, "metadata", f"{split}.json")
+        if os.path.exists(mp):
+            variant_root = os.path.dirname(os.path.dirname(mp))
+            ir = os.path.join(variant_root, "images")
+            if not os.path.isdir(ir):
+                # try a few common image dir variants
+                for img_dir in ["image", "imgs", "Images", "IMAGES"]:
+                    alt = os.path.join(variant_root, img_dir)
+                    if os.path.isdir(alt):
+                        ir = alt
+                        break
+                else:
+                    ir = None
+            return mp, ir
+
+    # Fallback: walk to find any metadata/<split>.json and infer images sibling
+    for dirpath, dirnames, filenames in os.walk(dataset_dir):
+        if os.path.basename(dirpath) == "metadata" and f"{split}.json" in filenames:
+            mp = os.path.join(dirpath, f"{split}.json")
+            variant_root = os.path.dirname(dirpath)
+            ir = os.path.join(variant_root, "images")
+            if not os.path.isdir(ir):
+                for img_dir in ["image", "imgs", "Images", "IMAGES"]:
+                    alt = os.path.join(variant_root, img_dir)
+                    if os.path.isdir(alt):
+                        ir = alt
+                        break
+                else:
+                    ir = None
+            return mp, ir
+
+    raise FileNotFoundError(f"Could not locate metadata for split '{split}' under {dataset_dir}")
+
+
+def load_screenspot_items(
+    dataset_dir: str,
+    split: str,
+    envs: Optional[Set[str]] = None,
+    types: Optional[Set[str]] = None,
+    dataset_variant: Optional[str] = None,
+) -> Tuple[List[dict], Optional[str]]:
+    meta_path, images_root = resolve_screenspot_paths(dataset_dir, split, dataset_variant)
     with open(meta_path) as f:
         items = json.load(f)
 
@@ -66,14 +143,14 @@ def load_screenspot_items(dataset_dir: str, split: str, envs: Optional[Set[str]]
                 return False
             return True
         items = [it for it in items if _keep(it)]
-    return items
+    return items, images_root
 
 
 def evaluate_screenspot_items(
     processor,
     model,
     items: List[dict],
-    dataset_dir: str,
+    images_root: Optional[str],
     device: str,
     min_pixels: int,
     max_pixels: int,
@@ -89,7 +166,7 @@ def evaluate_screenspot_items(
 
     for i in tqdm(range(N), desc="Evaluating ScreenSpot"):
         item = items[i]
-        img_path = os.path.join(dataset_dir, "ScreenSpot", "images", item["img_url"])
+        img_path = os.path.join(images_root, item["img_url"]) if images_root else item.get("img_path", "")
         if not os.path.exists(img_path):
             continue
 
@@ -228,6 +305,7 @@ def evaluate_checkpoint(
     limit: int = None,
     envs: Optional[Set[str]] = None,
     types: Optional[Set[str]] = None,
+    dataset_variant: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Load processor+model from checkpoint_dir and evaluate on ScreenSpot split."""
     processor = AutoProcessor.from_pretrained(
@@ -241,12 +319,12 @@ def evaluate_checkpoint(
         device_map="auto",
     )
 
-    items = load_screenspot_items(dataset_dir, split, envs=envs, types=types)
+    items, images_root = load_screenspot_items(dataset_dir, split, envs=envs, types=types, dataset_variant=dataset_variant)
     results = evaluate_screenspot_items(
         processor=processor,
         model=model,
         items=items,
-        dataset_dir=dataset_dir,
+        images_root=images_root,
         device=device,
         min_pixels=min_pixels,
         max_pixels=max_pixels,
@@ -269,6 +347,7 @@ def main():
     parser.add_argument("--output", type=str, default="eval_checkpoints_results.json", help="Output JSON path")
     parser.add_argument("--envs", type=str, nargs="*", default=None, help="Environment filter: e.g., desktop mobile web")
     parser.add_argument("--types", type=str, nargs="*", default=None, help="Data type filter: e.g., icon text")
+    parser.add_argument("--dataset_variant", type=str, default=None, help="Explicit variant folder under dataset_dir, e.g., ScreenSpotV2, ScreenSpotPro")
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -317,6 +396,7 @@ def main():
                 limit=args.limit,
                 envs=set(args.envs) if args.envs else None,
                 types=set(args.types) if args.types else None,
+                dataset_variant=args.dataset_variant,
             )
             all_results["checkpoints"][ck_dir] = res
             overall_sr = res["metrics"].get("overall", {}).get("success_rate", 0.0)

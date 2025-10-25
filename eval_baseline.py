@@ -8,7 +8,7 @@ import ast
 import re
 import json
 import argparse
-from typing import List, Dict, Any, Optional, Set
+from typing import List, Dict, Any, Optional, Set, Tuple
 import torch
 from tqdm import tqdm
 from PIL import Image
@@ -37,6 +37,73 @@ def parse_coord(output_text):
     return float("nan"), float("nan")
 
 
+def resolve_screenspot_paths(dataset_dir: str, split: str, dataset_variant: Optional[str] = None) -> Tuple[str, Optional[str]]:
+    """Resolve metadata path and images root, handling V1/V2/Pro layouts.
+    Returns (metadata_path, images_root). images_root may be None if not found.
+    """
+    if dataset_variant:
+        explicit_meta = os.path.join(dataset_dir, dataset_variant, "metadata", f"{split}.json")
+        if os.path.exists(explicit_meta):
+            variant_root = os.path.dirname(os.path.dirname(explicit_meta))
+            images_root = os.path.join(variant_root, "images")
+            if not os.path.isdir(images_root):
+                for img_dir in ["image", "imgs", "Images", "IMAGES"]:
+                    alt = os.path.join(variant_root, img_dir)
+                    if os.path.isdir(alt):
+                        images_root = alt
+                        break
+                else:
+                    images_root = None
+            return explicit_meta, images_root
+    meta_path = os.path.join(dataset_dir, "ScreenSpot", "metadata", f"{split}.json")
+    if os.path.exists(meta_path):
+        variant_root = os.path.dirname(os.path.dirname(meta_path))
+        images_root = os.path.join(variant_root, "images")
+        return meta_path, images_root if os.path.isdir(images_root) else None
+
+    candidate_roots = [
+        "ScreenSpotV2",
+        "ScreenSpot-v2",
+        "ScreenSpotV1",
+        "ScreenSpot-v1",
+        "ScreenSpotPro",
+        "ScreenSpot-Pro",
+        "ScreenSpot_Pro",
+        "ScreenSpot",
+    ]
+    for name in candidate_roots:
+        mp = os.path.join(dataset_dir, name, "metadata", f"{split}.json")
+        if os.path.exists(mp):
+            variant_root = os.path.dirname(os.path.dirname(mp))
+            ir = os.path.join(variant_root, "images")
+            if not os.path.isdir(ir):
+                for img_dir in ["image", "imgs", "Images", "IMAGES"]:
+                    alt = os.path.join(variant_root, img_dir)
+                    if os.path.isdir(alt):
+                        ir = alt
+                        break
+                else:
+                    ir = None
+            return mp, ir
+
+    for dirpath, dirnames, filenames in os.walk(dataset_dir):
+        if os.path.basename(dirpath) == "metadata" and f"{split}.json" in filenames:
+            mp = os.path.join(dirpath, f"{split}.json")
+            variant_root = os.path.dirname(dirpath)
+            ir = os.path.join(variant_root, "images")
+            if not os.path.isdir(ir):
+                for img_dir in ["image", "imgs", "Images", "IMAGES"]:
+                    alt = os.path.join(variant_root, img_dir)
+                    if os.path.isdir(alt):
+                        ir = alt
+                        break
+                else:
+                    ir = None
+            return mp, ir
+
+    raise FileNotFoundError(f"Could not locate metadata for split '{split}' under {dataset_dir}")
+
+
 def evaluate_screenspot(
     processor,
     model,
@@ -48,15 +115,13 @@ def evaluate_screenspot(
     limit: Optional[int] = None,
     envs: Optional[Set[str]] = None,
     types: Optional[Set[str]] = None,
+    dataset_variant: Optional[str] = None,
 ) -> Dict[str, Dict[str, List[dict]]]:
     """
     Evaluate on ScreenSpot dataset.
     Returns dict: {split_name: {data_type: [sample_results], ...}, ...}
     """
-    meta_path = os.path.join(dataset_dir, "ScreenSpot", "metadata", f"{split}.json")
-    if not os.path.exists(meta_path):
-        raise FileNotFoundError(f"ScreenSpot metadata not found: {meta_path}")
-
+    meta_path, images_root = resolve_screenspot_paths(dataset_dir, split, dataset_variant=dataset_variant)
     with open(meta_path) as f:
         items = json.load(f)
 
@@ -84,7 +149,7 @@ def evaluate_screenspot(
 
     for i in tqdm(range(N), desc=f"Evaluating {split}"):
         item = items[i]
-        img_path = os.path.join(dataset_dir, "ScreenSpot", "images", item["img_url"])
+        img_path = os.path.join(images_root, item["img_url"]) if images_root else item.get("img_path", "")
         if not os.path.exists(img_path):
             continue
 
@@ -164,14 +229,20 @@ def evaluate_screenspot(
 
 
 def compute_metrics(results):
-    """Compute per-split and per-type success rates from results dict."""
-    metrics = {}
+    """Compute per-split, per-type success rates and overall aggregate."""
+    metrics: Dict[str, Any] = {}
+    overall_total = 0
+    overall_success = 0
     for split_name, split_data in results.items():
         metrics[split_name] = {}
         for data_type, samples in split_data.items():
             total = len(samples)
-            success = sum(s["acc"] for s in samples)
-            metrics[split_name][data_type] = {"success_rate": success / total if total > 0 else 0.0, "total": total}
+            success = sum(s.get("acc", 0) for s in samples)
+            sr = success / total if total > 0 else 0.0
+            metrics[split_name][data_type] = {"success_rate": sr, "total": total}
+            overall_total += total
+            overall_success += success
+    metrics["overall"] = {"success_rate": (overall_success / overall_total) if overall_total > 0 else 0.0, "total": overall_total}
     return metrics
 
 
@@ -200,6 +271,12 @@ def main():
         default=None,
         help="Data type filter by item.data_type (e.g., icon text). Default: all",
     )
+    parser.add_argument(
+        "--dataset_variant",
+        type=str,
+        default=None,
+        help="Explicit variant folder under dataset_dir, e.g., ScreenSpot, ScreenSpotV2, ScreenSpotPro",
+    )
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -223,12 +300,16 @@ def main():
         limit=args.limit,
         envs=set(args.envs) if args.envs else None,
         types=set(args.types) if args.types else None,
+        dataset_variant=args.dataset_variant,
     )
 
     metrics = compute_metrics(results)
 
     print("\n=== Evaluation Results ===")
     for split_name, split_metrics in metrics.items():
+        if split_name == "overall":
+            print(f"\noverall: {split_metrics['success_rate']:.4f} ({split_metrics['total']} samples)")
+            continue
         print(f"\n{split_name}:")
         for data_type, m in split_metrics.items():
             print(f"  {data_type}: {m['success_rate']:.4f} ({m['total']} samples)")
@@ -237,6 +318,7 @@ def main():
     output_data = {
         "model_id": args.model_id,
         "split": args.split,
+        "dataset_variant": args.dataset_variant,
         "envs": args.envs,
         "types": args.types,
         "metrics": metrics,
