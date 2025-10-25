@@ -496,46 +496,48 @@ class XYFSM:
         self.digit_set = ids_with('0123456789-+.')
         self.eos_id = self.tok.eos_token_id
         self.fallback_all = set(self.vocab.values())
-        self.reset()
-
-    def reset(self):
-        self.state = 'S0'
-
-    def allowed(self, generated_ids: List[int]) -> Set[int]:
-        # Decode small tail for state update (robust to merged tokens)
-        tail = generated_ids[-32:] if len(generated_ids) > 32 else generated_ids
+    def allowed_for_suffix(self, suffix_ids: List[int]) -> Set[int]:
+        # Compute constraints purely from generated suffix to avoid confusion from prompt text
+        if suffix_ids is None:
+            suffix_ids = []
+        tail = suffix_ids[-64:] if len(suffix_ids) > 64 else suffix_ids
         txt = self.tok.decode(tail, skip_special_tokens=True)
         txt = normalize_fullwidth(txt)
-        if self.state == 'S0':
-            self.state = 'Sx' if '[' in txt else 'S0'
-            # If we can find any '['-containing tokens, constrain to them; otherwise, don't constrain at all
+        # Determine simple state from suffix content
+        if '[' not in txt:
+            # Still need to open bracket
             return set(self.lbr_set) if len(self.lbr_set) > 0 else set(self.fallback_all)
-        if self.state == 'Sx':
-            if ']' in txt: self.state = 'Sdone'
-            if ',' in txt: self.state = 'Sy'
-            # allow digits, dot, sign, comma, space
-            allowed: Set[int] = set()
-            allowed |= self.digit_set
-            allowed |= self.comma_set
-            allowed |= self.space_set
-            allowed |= self.rbr_set
-            return allowed if len(allowed) > 0 else set(self.fallback_all)
-        if self.state == 'Sy':
-            if ']' in txt: self.state = 'Sdone'
-            allowed: Set[int] = set()
-            allowed |= self.digit_set
-            allowed |= self.space_set
-            allowed |= self.rbr_set
-            return allowed if len(allowed) > 0 else set(self.fallback_all)
-        if self.state == 'Sdone':
+        # Inside bracketed span
+        after_lbr = txt.split('[', 1)[1]
+        if ']' in after_lbr:
+            # Already closed; only allow EOS to stop
             return set([self.eos_id]) if self.eos_id is not None else set(self.fallback_all)
-        return set()
+        if ',' in after_lbr:
+            # Second coordinate
+            allowed: Set[int] = set()
+            allowed |= self.digit_set
+            allowed |= self.space_set
+            allowed |= self.rbr_set
+            return allowed if len(allowed) > 0 else set(self.fallback_all)
+        # First coordinate
+        allowed: Set[int] = set()
+        allowed |= self.digit_set
+        allowed |= self.comma_set
+        allowed |= self.space_set
+        allowed |= self.rbr_set
+        return allowed if len(allowed) > 0 else set(self.fallback_all)
 
 
 def make_prefix_allowed_tokens_fn(tokenizer):
     fsm = XYFSM(tokenizer)
+    # Track prompt length per batch row so we can isolate the generated suffix
+    base_len: Dict[int, int] = {}
     def fn(batch_id: int, input_ids: torch.LongTensor):
-        return list(fsm.allowed(input_ids.tolist()))
+        ids = input_ids.tolist()
+        if batch_id not in base_len:
+            base_len[batch_id] = len(ids)
+        suffix = ids[base_len[batch_id]:]
+        return list(fsm.allowed_for_suffix(suffix))
     return fn
 
 
