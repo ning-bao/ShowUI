@@ -783,9 +783,14 @@ def reinforce_step(model, processor, device, batch, args, ref_logits_fn=None):
     active_mask = (coord_mask * token_mask)
     seq_loss = (token_ce * active_mask).sum(dim=1) / (active_mask.sum(dim=1) + 1e-6)
 
-    # Advantage: per-batch whitening
+    # Advantage: per-batch whitening (with fallback for zero variance)
     adv = rewards_tensor.clone()
-    adv = (adv - adv.mean()) / (adv.std(unbiased=False) + 1e-6)
+    reward_std = adv.std(unbiased=False)
+    if reward_std > 1e-6:
+        adv = (adv - adv.mean()) / reward_std
+    else:
+        # All rewards identical - use raw rewards to maintain gradient signal
+        adv = adv - adv.mean().detach()  # center but don't normalize
 
     # Entropy (masked)
     log_probs = F.log_softmax(logits, dim=-1)
@@ -828,6 +833,7 @@ def reinforce_step(model, processor, device, batch, args, ref_logits_fn=None):
         "entropy_mean": float(entropy_mean.item()),
         "kl": float(kl_loss.item()),
         "parse_valid": float(parsed_ok_tensor.mean().item()),
+        "reward_std": float(reward_std.item()),
     }
 
     return loss, stats["reward_mean"], stats["entropy_mean"], stats["kl"], decoded, stats
@@ -1133,6 +1139,10 @@ def main():
             running["kl"] += kl
 
             pbar.set_postfix({"loss": f"{loss:.4f}", "R": f"{reward:.3f}", "H": f"{ent:.3f}", "KL": f"{kl:.3f}", "klc": f"{args.kl_coef:.3g}"})
+            
+            # Debug: print sample outputs when reward is poor
+            if global_step % 20 == 0 and len(decoded) > 0:
+                print(f"\n[Step {global_step}] Sample output: {decoded[0][:100]}")
 
             # Adaptive KL control (masked KL surrogate)
             try:
@@ -1177,6 +1187,10 @@ def main():
                 writer.add_scalar("train/kl_coef", float(args.kl_coef), global_step)
                 writer.add_scalar("train/lr", optimizer.param_groups[0]['lr'], global_step)
                 writer.add_scalar("train/cooldown_active", 1.0 if fs>0 else 0.0, global_step)
+                if 'parse_valid' in stats:
+                    writer.add_scalar("train/parse_valid", stats['parse_valid'], global_step)
+                if 'reward_std' in stats:
+                    writer.add_scalar("train/reward_std", stats['reward_std'], global_step)
 
             # Stats JSONL
             if args.stats_jsonl:
