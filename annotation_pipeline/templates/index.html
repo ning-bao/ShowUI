@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ShowUI Annotation Tool</title>
+    <title>AccuAnnotate</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
@@ -13,22 +13,16 @@
             <aside class="sidebar">
                 <div class="sidebar-header">
                     <div class="sidebar-title-row">
-                        <h2>Images</h2>
-                        <span id="selectedCount" class="selected-count" style="display: none;">0 selected</span>
+                        <h2>AccuAnnotate</h2>
+                        <div class="action-buttons">
+                            <button id="uploadBtn" class="btn-icon-sm" title="Upload Images">📤</button>
+                            <button id="uploadFolderBtn" class="btn-icon-sm" title="Import Folder">📁</button>
+                        </div>
                     </div>
-                    <div class="action-buttons">
-                        <button id="uploadBtn" class="btn btn-sm btn-primary" title="Upload Images">
-                            📤
-                        </button>
-                        <button id="uploadFolderBtn" class="btn btn-sm btn-primary" title="Import Folder">
-                            📁
-                        </button>
-                        <button id="bulkAnnotateBtn" class="btn btn-sm btn-secondary" title="Bulk Annotate" style="display: none;">
-                            🤖
-                        </button>
-                        <button id="bulkDeleteBtn" class="btn btn-sm btn-danger" title="Bulk Delete" style="display: none;">
-                            🗑️
-                        </button>
+                    <div class="bulk-action-buttons" id="bulkActionButtons" style="display: none;">
+                        <span id="selectedCount" class="selected-count">0 selected</span>
+                        <button id="bulkAnnotateBtn" class="btn btn-sm btn-secondary" title="Bulk Annotate">🤖</button>
+                        <button id="bulkDeleteBtn" class="btn btn-sm btn-danger" title="Bulk Delete">🗑️</button>
                     </div>
                 </div>
                 
@@ -36,22 +30,35 @@
                 <div class="filter-section">
                     <div class="filter-row">
                         <input type="text" id="searchInput" class="filter-input" placeholder="Search..." />
-                        <button id="sortBtn" class="btn-icon" title="Sort">
-                            ⇅
-                        </button>
                     </div>
-                    <select id="statusFilter" class="filter-select">
-                        <option value="all">All Status</option>
-                        <option value="annotated">Annotated</option>
-                        <option value="not-annotated">Not Annotated</option>
-                        <option value="preprocessed">Preprocessed</option>
-                    </select>
+                    <div class="filter-row">
+                        <select id="statusFilter" class="filter-select">
+                            <option value="all">All Status</option>
+                            <option value="annotated">Annotated</option>
+                            <option value="not-annotated">Not Annotated</option>
+                        </select>
+                        <select id="sortSelect" class="filter-select">
+                            <option value="name-asc">Name ↑</option>
+                            <option value="name-desc">Name ↓</option>
+                            <option value="status-asc">Status ↑</option>
+                            <option value="status-desc">Status ↓</option>
+                        </select>
+                    </div>
+                    <div class="select-all-row">
+                        <label class="select-all-label">
+                            <input type="checkbox" id="selectAllCheckbox">
+                            <span>Select All</span>
+                        </label>
+                        <button id="createFolderBtn" class="btn-icon" title="Create Folder">📂</button>
+                        <button id="toggleViewModeBtn" class="btn-icon" title="Toggle View Mode">🗂️</button>
+                    </div>
                 </div>
 
                 <div id="imageList" class="image-list">
                     <div class="loading">Loading...</div>
                 </div>
             </aside>
+            <div id="sidebarResizer" class="sidebar-resizer"></div>
 
             <!-- Main Content Area -->
             <main class="content-area">
@@ -84,7 +91,7 @@
                                 👁️ Annotations
                             </button>
                             <button id="pasteJsonBtn" class="btn btn-secondary">
-                                📋 Paste
+                                📋 Parse
                             </button>
                         </div>
                     </div>
@@ -241,10 +248,9 @@
                 </div>
             </div>
         </div>
+        <!-- Toast Notification -->
+        <div id="toast" class="toast"></div>
     </div>
-
-    <!-- Toast Notification -->
-    <div id="toast" class="toast"></div>
 
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>

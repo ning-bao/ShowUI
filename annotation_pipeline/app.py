@@ -53,11 +53,12 @@ def get_images():
     image_folder = Path(app.config['UPLOAD_FOLDER'])
     annotation_folder = Path(app.config['ANNOTATION_FOLDER'])
     
-    for img_path in image_folder.glob('*'):
-        if img_path.suffix.lower() in ['.jpg', '.jpeg', '.png', '.gif', '.bmp']:
+    for img_path in image_folder.rglob('*'):
+        if img_path.is_file() and img_path.suffix.lower() in ['.jpg', '.jpeg', '.png', '.gif', '.bmp']:
+            relative_path = img_path.relative_to(image_folder)
             annotation_path = annotation_folder / f"{img_path.stem}.json"
             images.append({
-                'filename': img_path.name,
+                'filename': str(relative_path).replace('\\', '/'),
                 'has_annotation': annotation_path.exists(),
                 'annotation_path': str(annotation_path) if annotation_path.exists() else None
             })
@@ -65,7 +66,7 @@ def get_images():
     return jsonify({'images': images})
 
 
-@app.route('/api/image/<filename>')
+@app.route('/api/image/<path:filename>')
 def get_image(filename):
     """Serve image file"""
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
@@ -85,7 +86,7 @@ def get_annotation(filename):
     return jsonify(annotation)
 
 
-@app.route('/api/annotate/<filename>', methods=['POST'])
+@app.route('/api/annotate/<path:filename>', methods=['POST'])
 def annotate_image(filename):
     """Generate annotation for an image using OpenAI API"""
     image_path = Path(app.config['UPLOAD_FOLDER']) / filename
@@ -109,7 +110,7 @@ def annotate_image(filename):
     return jsonify(annotation)
 
 
-@app.route('/api/preprocess/<filename>', methods=['POST'])
+@app.route('/api/preprocess/<path:filename>', methods=['POST'])
 def preprocess_image(filename):
     """Run preprocessing only and return proposed boxes/points (no LLM)."""
     image_path = Path(app.config['UPLOAD_FOLDER']) / filename
@@ -124,7 +125,7 @@ def preprocess_image(filename):
         return jsonify({'error': f'Preprocess failed: {str(e)}'}), 500
 
 
-@app.route('/api/image/<filename>', methods=['DELETE'])
+@app.route('/api/image/<path:filename>', methods=['DELETE'])
 def delete_image(filename):
     """Delete an image and its annotation"""
     image_path = Path(app.config['UPLOAD_FOLDER']) / filename
@@ -266,9 +267,38 @@ def upload_file():
         return jsonify({'error': 'No selected file'}), 400
     
     if file:
-        filename = secure_filename(file.filename)
-        file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+        relative_path = request.form.get('relative_path', '')
+        
+        if relative_path:
+            parts = Path(relative_path).parts
+            if len(parts) > 1:
+                safe_parts = [secure_filename(p) for p in parts]
+                filename = '/'.join(safe_parts[1:])
+            else:
+                filename = secure_filename(file.filename)
+        else:
+            filename = secure_filename(file.filename)
+        
+        file_path = Path(app.config['UPLOAD_FOLDER']) / filename
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file.save(str(file_path))
+        
         return jsonify({'success': True, 'filename': filename})
+
+
+@app.route('/api/folder', methods=['POST'])
+def create_folder():
+    data = request.get_json(silent=True) or {}
+    name = data.get('name', '').strip()
+    if not name:
+        return jsonify({'error': 'Missing folder name'}), 400
+    safe = secure_filename(name)
+    folder_path = Path(app.config['UPLOAD_FOLDER']) / safe
+    try:
+        folder_path.mkdir(parents=True, exist_ok=True)
+        return jsonify({'success': True, 'folder': str(safe)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/batch-annotate', methods=['POST'])
@@ -277,15 +307,16 @@ def batch_annotate():
     image_folder = Path(app.config['UPLOAD_FOLDER'])
     results = []
     
-    for img_path in image_folder.glob('*'):
-        if img_path.suffix.lower() in ['.jpg', '.jpeg', '.png', '.gif', '.bmp']:
+    for img_path in image_folder.rglob('*'):
+        if img_path.is_file() and img_path.suffix.lower() in ['.jpg', '.jpeg', '.png', '.gif', '.bmp']:
+            relative_path = img_path.relative_to(image_folder)
             annotation_path = Path(app.config['ANNOTATION_FOLDER']) / f"{img_path.stem}.json"
             
             # Skip if already annotated (unless force flag is set)
             force = request.json.get('force', False) if request.json else False
             if annotation_path.exists() and not force:
                 results.append({
-                    'filename': img_path.name,
+                    'filename': str(relative_path).replace('\\', '/'),
                     'status': 'skipped',
                     'reason': 'already_annotated'
                 })
@@ -297,12 +328,12 @@ def batch_annotate():
                     json.dump(annotation, f, indent=2)
                 
                 results.append({
-                    'filename': img_path.name,
+                    'filename': str(relative_path).replace('\\', '/'),
                     'status': 'success'
                 })
             except Exception as e:
                 results.append({
-                    'filename': img_path.name,
+                    'filename': str(relative_path).replace('\\', '/'),
                     'status': 'error',
                     'error': str(e)
                 })

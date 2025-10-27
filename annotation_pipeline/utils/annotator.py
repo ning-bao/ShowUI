@@ -466,12 +466,33 @@ class GPTAnnotator:
         
         if _OMNI_PARSER_INSTANCE is not None:
             print("  OmniParser: already loaded (cached)")
+            # Update runtime thresholds from env if provided
+            try:
+                min_conf_env = os.getenv('OMNIPARSER_MIN_CONF', '').strip()
+                if min_conf_env:
+                    val = float(min_conf_env)
+                    try:
+                        setattr(_OMNI_PARSER_INSTANCE, 'min_confidence', val)
+                        print(f"  OmniParser: updated min_confidence to {val} from env")
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             return
         
         try:
             import omniparser_local
             print("  OmniParser: loading models into memory...")
-            _OMNI_PARSER_INSTANCE = omniparser_local.OmniParserV2(min_confidence=0.7)
+            # Allow configuring detector weights and thresholds via env
+            min_conf = 0.3
+            try:
+                min_conf_env = os.getenv('OMNIPARSER_MIN_CONF', '').strip()
+                if min_conf_env:
+                    min_conf = float(min_conf_env)
+            except Exception:
+                min_conf = 0.3
+            weights = os.getenv('OMNIPARSER_DETECTOR_WEIGHTS', '').strip() or None
+            _OMNI_PARSER_INSTANCE = omniparser_local.OmniParserV2(min_confidence=min_conf, detector_weights=weights)
             print("  ✓ OmniParser models preloaded and ready")
         except ImportError:
             print("  ⚠️  OmniParser: omniparser_local module not found")
@@ -980,7 +1001,15 @@ class GPTAnnotator:
                     else:
                         print("[Annotator] Using cached OmniParser-v2 instance...")
                     
-                    result = _OMNI_PARSER_INSTANCE.parse(image_path, conf_threshold=0.25, with_captions=False)
+                    # Detection threshold configurable via env
+                    conf_thr = 0.25
+                    try:
+                        env_conf = os.getenv('OMNIPARSER_CONF_THRESHOLD', '').strip()
+                        if env_conf:
+                            conf_thr = float(env_conf)
+                    except Exception:
+                        conf_thr = 0.25
+                    result = _OMNI_PARSER_INSTANCE.parse(image_path, conf_threshold=conf_thr, with_captions=False)
                     elements = result.get('elements', [])
                     # Normalize format
                     normalized = []

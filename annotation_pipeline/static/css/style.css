@@ -53,6 +53,19 @@ body {
     flex-direction: column;
     height: 100vh;
     overflow: hidden;
+    position: relative;
+    min-width: 200px;
+    max-width: 600px;
+}
+
+.sidebar-resizer {
+    width: 6px;
+    background: rgba(0,0,0,0.08);
+    cursor: col-resize;
+}
+
+.sidebar-resizer:hover {
+    background: rgba(0,0,0,0.18);
 }
 
 .sidebar-header {
@@ -65,25 +78,51 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 8px;
 }
 
 .sidebar-header h2 {
     font-size: 16px;
     font-weight: 600;
     margin: 0;
+    flex: 1;
 }
 
 .selected-count {
     font-size: 12px;
     color: var(--primary-color);
     font-weight: 600;
+    margin-right: 8px;
 }
 
 .action-buttons {
     display: flex;
+    gap: 4px;
+    align-items: center;
+}
+
+.bulk-action-buttons {
+    display: flex;
     gap: 6px;
-    flex-wrap: wrap;
+    align-items: center;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-color);
+}
+
+.btn-icon-sm {
+    padding: 4px 8px;
+    background: var(--primary-color);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-icon-sm:hover {
+    background: var(--primary-hover);
+    transform: scale(1.05);
 }
 
 /* Filter Section */
@@ -117,13 +156,34 @@ body {
 }
 
 .filter-select {
-    width: 100%;
+    flex: 1;
     padding: 6px 10px;
     border: 1px solid var(--border-color);
     border-radius: 6px;
     font-size: 13px;
     outline: none;
     background: white;
+    cursor: pointer;
+}
+
+.select-all-row {
+    display: flex;
+    align-items: center;
+    padding: 4px 0;
+}
+
+.select-all-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.select-all-label input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
     cursor: pointer;
 }
 
@@ -135,15 +195,80 @@ body {
     padding: 8px;
 }
 
+/* Folder Structure */
+.folder-item {
+    margin-bottom: 2px;
+}
+
+.folder-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background 0.2s;
+    user-select: none;
+}
+
+.folder-header:hover {
+    background: #f3f4f6;
+}
+
+.folder-toggle {
+    font-size: 12px;
+    color: var(--text-secondary);
+    width: 16px;
+    flex-shrink: 0;
+    text-align: center;
+    transition: transform 0.2s;
+}
+
+.folder-toggle.expanded {
+    transform: rotate(90deg);
+}
+
+.folder-icon {
+    font-size: 16px;
+    flex-shrink: 0;
+}
+
+.folder-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.folder-count {
+    font-size: 11px;
+    color: var(--text-secondary);
+    background: #f3f4f6;
+    padding: 2px 6px;
+    border-radius: 10px;
+}
+
+.folder-children {
+    padding-left: 20px;
+    display: none;
+}
+
+.folder-children.expanded {
+    display: block;
+}
+
 .image-item {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 8px 10px;
+    padding: 6px 8px;
     border-radius: 6px;
     cursor: pointer;
     transition: background 0.2s;
-    margin-bottom: 4px;
+    margin-bottom: 2px;
 }
 
 .image-item:hover {
@@ -165,9 +290,23 @@ body {
     cursor: pointer;
 }
 
-.image-item-icon {
-    font-size: 18px;
+.image-item-thumb {
+    width: 38px;
+    height: 38px;
+    border-radius: 4px;
+    overflow: hidden;
     flex-shrink: 0;
+    border: 1px solid var(--border-color);
+    background: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.image-item-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
 }
 
 .image-item-info {
@@ -312,6 +451,7 @@ body {
     overflow-y: auto;
     display: flex;
     flex-direction: column;
+    height: 100%;
 }
 
 /* Image Container */
@@ -345,9 +485,8 @@ body {
     background: var(--surface);
     padding: 12px;
     margin-bottom: 1px;
-    flex: 1;
-    min-height: 15vh;
-    max-height: 70vh;
+    flex: 1 1 0;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -382,8 +521,9 @@ body {
     flex-direction: column;
     gap: 6px;
     overflow-y: auto;
+    overflow-x: hidden;
     flex: 1;
-    min-height: 15vh;
+    min-height: 0;
 }
 
 .detection-item {
@@ -424,6 +564,7 @@ body {
     flex-direction: column;
     gap: 8px;
     overflow-y: auto;
+    overflow-x: hidden;
     flex: 1;
     min-height: 0;
 }

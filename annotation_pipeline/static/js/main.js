@@ -10,11 +10,27 @@ let allImages = [];
 let currentFilter = 'all';
 let selectedImages = new Set();
 let sortOrder = 'name-asc';
+let lastSelectedIndex = -1;
+let filteredImages = [];
+let viewMode = 'list'; // 'list' or 'folder'
+let expandedFolders = new Set();
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', () => {
+    // Restore state from localStorage
+    const savedVisualization = localStorage.getItem('showingVisualization');
+    const savedPreprocess = localStorage.getItem('showingPreprocessOverlay');
+    
+    if (savedVisualization !== null) {
+        showingVisualization = savedVisualization === 'true';
+    }
+    if (savedPreprocess !== null) {
+        showingPreprocessOverlay = savedPreprocess === 'true';
+    }
+    
     loadImages();
     setupEventListeners();
+    setupSidebarResizer();
 });
 
 // Setup event listeners
@@ -24,9 +40,11 @@ function setupEventListeners() {
     const uploadModal = document.getElementById('uploadModal');
     const uploadFolderBtn = document.getElementById('uploadFolderBtn');
     const folderModal = document.getElementById('folderModal');
+    const createFolderBtn = document.getElementById('createFolderBtn');
     
     uploadBtn.addEventListener('click', () => uploadModal.classList.add('active'));
     uploadFolderBtn.addEventListener('click', () => folderModal.classList.add('active'));
+    createFolderBtn.addEventListener('click', createFolderPrompt);
     
     // Close modals
     document.querySelectorAll('.modal .close').forEach(closeBtn => {
@@ -39,8 +57,8 @@ function setupEventListeners() {
     document.getElementById('bulkAnnotateBtn').addEventListener('click', bulkAnnotate);
     document.getElementById('bulkDeleteBtn').addEventListener('click', bulkDelete);
     
-    // Sort button
-    document.getElementById('sortBtn').addEventListener('click', cycleSortOrder);
+    // Sort select
+    document.getElementById('sortSelect').addEventListener('change', handleSortChange);
     
     // File inputs
     document.getElementById('fileInput').addEventListener('change', handleFileSelect);
@@ -87,6 +105,12 @@ function setupEventListeners() {
     document.getElementById('searchInput').addEventListener('input', filterImages);
     document.getElementById('statusFilter').addEventListener('change', filterImages);
     
+    // Select all checkbox
+    document.getElementById('selectAllCheckbox').addEventListener('change', handleSelectAll);
+    
+    // Toggle view mode
+    document.getElementById('toggleViewModeBtn').addEventListener('click', toggleViewMode);
+    
     // Close modals on outside click
     window.addEventListener('click', (e) => {
         if (e.target.classList.contains('modal')) {
@@ -103,6 +127,51 @@ function setupEventListeners() {
                 drawAnnotations();
             }
         }, 100);
+    });
+}
+async function createFolderPrompt() {
+    const name = prompt('Enter new folder name:');
+    if (!name) return;
+    try {
+        const res = await fetch('/api/folder', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name })
+        });
+        if (!res.ok) throw new Error('Failed to create folder');
+        await loadImages();
+        showToast('Folder created', 'success');
+    } catch (e) {
+        showToast('Failed to create folder', 'error');
+    }
+}
+
+// Sidebar resizer
+function setupSidebarResizer() {
+    const sidebar = document.querySelector('.sidebar');
+    const resizer = document.getElementById('sidebarResizer');
+    if (!sidebar || !resizer) return;
+    let isDragging = false;
+
+    const minWidth = 200;
+    const maxWidth = 600;
+
+    resizer.addEventListener('mousedown', (e) => {
+        isDragging = true;
+        document.body.style.cursor = 'col-resize';
+        e.preventDefault();
+    });
+
+    window.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        const newWidth = Math.min(Math.max(e.clientX, minWidth), maxWidth);
+        sidebar.style.width = newWidth + 'px';
+    });
+
+    window.addEventListener('mouseup', () => {
+        if (!isDragging) return;
+        isDragging = false;
+        document.body.style.cursor = '';
     });
 }
 
@@ -125,7 +194,7 @@ function displayImageList() {
     const searchTerm = document.getElementById('searchInput').value.toLowerCase();
     const statusFilter = document.getElementById('statusFilter').value;
     
-    let filtered = allImages.filter(img => {
+    filteredImages = allImages.filter(img => {
         if (searchTerm && !img.filename.toLowerCase().includes(searchTerm)) {
             return false;
         }
@@ -137,7 +206,7 @@ function displayImageList() {
     });
     
     // Sort
-    filtered.sort((a, b) => {
+    filteredImages.sort((a, b) => {
         if (sortOrder === 'name-asc') {
             return a.filename.localeCompare(b.filename);
         } else if (sortOrder === 'name-desc') {
@@ -150,32 +219,212 @@ function displayImageList() {
         return 0;
     });
     
-    if (filtered.length === 0) {
+    if (filteredImages.length === 0) {
         imageList.innerHTML = '<div class="no-data">No images found</div>';
         return;
     }
     
-    imageList.innerHTML = filtered.map(img => `
-        <div class="image-item" data-filename="${img.filename}">
-            <div class="image-item-checkbox">
-                <input type="checkbox" 
-                       data-filename="${img.filename}" 
-                       ${selectedImages.has(img.filename) ? 'checked' : ''}
-                       onclick="toggleImageSelection('${img.filename}', event)">
-            </div>
-            <div class="image-item-icon" onclick="selectImage('${img.filename}')">🖼️</div>
-            <div class="image-item-info" onclick="selectImage('${img.filename}')">
-                <div class="image-item-name" title="${img.filename}">${img.filename}</div>
-                <div class="image-item-status">
-                    <span class="status-badge ${img.has_annotation ? 'annotated' : 'not-annotated'}">
-                        ${img.has_annotation ? '✓ Annotated' : '✗ Not annotated'}
-                    </span>
-                </div>
-            </div>
-        </div>
-    `).join('');
+    if (viewMode === 'folder') {
+        displayFolderView();
+    } else {
+        displayListView();
+    }
     
     updateBulkActionsVisibility();
+    updateSelectAllCheckbox();
+}
+
+// Display list view
+function displayListView() {
+    const imageList = document.getElementById('imageList');
+    
+    imageList.innerHTML = filteredImages.map((img, index) => {
+        const escapedFilename = img.filename.replace(/'/g, "\\'");
+        return `
+            <div class="image-item" data-filename="${img.filename}" data-index="${index}">
+                <div class="image-item-checkbox">
+                    <input type="checkbox" 
+                           data-filename="${img.filename}"
+                           data-index="${index}"
+                           ${selectedImages.has(img.filename) ? 'checked' : ''}
+                           onclick="toggleImageSelection('${escapedFilename}', ${index}, event)">
+                </div>
+                <div class="image-item-thumb" onclick="selectImage('${escapedFilename}')">
+                    <img src="/api/image/${img.filename}" alt="${img.filename}" />
+                </div>
+                <div class="image-item-info" onclick="selectImage('${escapedFilename}')">
+                    <div class="image-item-name" title="${img.filename}">${img.filename}</div>
+                    <div class="image-item-status">
+                        <span class="status-badge ${img.has_annotation ? 'annotated' : 'not-annotated'}">
+                            ${img.has_annotation ? '✓ Annotated' : '✗ Not annotated'}
+                        </span>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+// Build folder tree structure
+function buildFolderTree() {
+    const tree = {};
+    
+    filteredImages.forEach((img, index) => {
+        const parts = img.filename.split('/');
+        
+        if (parts.length === 1) {
+            // Root level file
+            if (!tree['__root__']) {
+                tree['__root__'] = { folders: {}, files: [] };
+            }
+            tree['__root__'].files.push({ ...img, index });
+        } else {
+            // Nested file
+            let current = tree;
+            
+            for (let i = 0; i < parts.length - 1; i++) {
+                const folder = parts[i];
+                if (!current[folder]) {
+                    current[folder] = { folders: {}, files: [] };
+                }
+                current = current[folder].folders;
+            }
+            
+            const parentFolder = parts[parts.length - 2];
+            const parentObj = getParentFolder(tree, parts.slice(0, -1));
+            parentObj.files.push({ ...img, index, displayName: parts[parts.length - 1] });
+        }
+    });
+    
+    return tree;
+}
+
+// Get parent folder object
+function getParentFolder(tree, path) {
+    let current = tree;
+    
+    for (const folder of path) {
+        if (!current[folder]) {
+            current[folder] = { folders: {}, files: [] };
+        }
+        if (folder === path[path.length - 1]) {
+            return current[folder];
+        }
+        current = current[folder].folders;
+    }
+    
+    return current;
+}
+
+// Display folder view
+function displayFolderView() {
+    const imageList = document.getElementById('imageList');
+    const tree = buildFolderTree();
+    
+    imageList.innerHTML = renderFolderTree(tree, '');
+}
+
+// Render folder tree recursively
+function renderFolderTree(tree, path) {
+    let html = '';
+    
+    // Sort folders and files
+    const folders = Object.keys(tree).filter(k => k !== '__root__' && tree[k].folders).sort();
+    
+    for (const folderName of folders) {
+        const folderData = tree[folderName];
+        const folderPath = path ? `${path}/${folderName}` : folderName;
+        const isExpanded = expandedFolders.has(folderPath);
+        const fileCount = countFilesInFolder(folderData);
+        const escapedPath = folderPath.replace(/'/g, "\\'");
+        
+        html += `
+            <div class="folder-item">
+                <div class="folder-header" onclick="toggleFolder('${escapedPath}')">
+                    <span class="folder-toggle ${isExpanded ? 'expanded' : ''}">▶</span>
+                    <span class="folder-icon">📁</span>
+                    <span class="folder-name">${folderName}</span>
+                    <span class="folder-count">${fileCount}</span>
+                </div>
+                <div class="folder-children ${isExpanded ? 'expanded' : ''}">
+                    ${renderFolderTree(folderData.folders, folderPath)}
+                    ${renderFiles(folderData.files)}
+                </div>
+            </div>
+        `;
+    }
+    
+    // Render root files
+    if (tree['__root__']) {
+        html += renderFiles(tree['__root__'].files);
+    }
+    
+    return html;
+}
+
+// Render files
+function renderFiles(files) {
+    return files.map(img => {
+        const displayName = img.displayName || img.filename;
+        const escapedFilename = img.filename.replace(/'/g, "\\'");
+        return `
+            <div class="image-item" data-filename="${img.filename}" data-index="${img.index}">
+                <div class="image-item-checkbox">
+                    <input type="checkbox" 
+                           data-filename="${img.filename}"
+                           data-index="${img.index}"
+                           ${selectedImages.has(img.filename) ? 'checked' : ''}
+                           onclick="toggleImageSelection('${escapedFilename}', ${img.index}, event)">
+                </div>
+                <div class="image-item-thumb" onclick="selectImage('${escapedFilename}')">
+                    <img src="/api/image/${img.filename}" alt="${img.filename}" />
+                </div>
+                <div class="image-item-info" onclick="selectImage('${escapedFilename}')">
+                    <div class="image-item-name" title="${img.filename}">${displayName}</div>
+                    <div class="image-item-status">
+                        <span class="status-badge ${img.has_annotation ? 'annotated' : 'not-annotated'}">
+                            ${img.has_annotation ? '✓ Annotated' : '✗ Not annotated'}
+                        </span>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+// Count files in folder recursively
+function countFilesInFolder(folderData) {
+    let count = folderData.files.length;
+    
+    for (const subfolder in folderData.folders) {
+        count += countFilesInFolder(folderData.folders[subfolder]);
+    }
+    
+    return count;
+}
+
+// Toggle folder expansion
+function toggleFolder(path) {
+    if (expandedFolders.has(path)) {
+        expandedFolders.delete(path);
+    } else {
+        expandedFolders.add(path);
+    }
+    displayImageList();
+}
+
+// Toggle view mode
+function toggleViewMode() {
+    viewMode = viewMode === 'list' ? 'folder' : 'list';
+    const btn = document.getElementById('toggleViewModeBtn');
+    if (viewMode === 'folder') {
+        btn.title = 'List View';
+        btn.textContent = '📋';
+    } else {
+        btn.title = 'Folder View';
+        btn.textContent = '🗂️';
+    }
+    displayImageList();
 }
 
 // Filter images
@@ -184,52 +433,102 @@ function filterImages() {
 }
 
 // Toggle image selection
-function toggleImageSelection(filename, event) {
+function toggleImageSelection(filename, index, event) {
     event.stopPropagation();
     
-    if (selectedImages.has(filename)) {
-        selectedImages.delete(filename);
-    } else {
-        selectedImages.add(filename);
+    // Check for Shift key (range selection)
+    if (event.shiftKey && lastSelectedIndex !== -1) {
+        const start = Math.min(lastSelectedIndex, index);
+        const end = Math.max(lastSelectedIndex, index);
+        
+        // Select all images in range
+        for (let i = start; i <= end; i++) {
+            if (i < filteredImages.length) {
+                selectedImages.add(filteredImages[i].filename);
+            }
+        }
+        displayImageList();
+    }
+    // Check for Ctrl/Cmd key (multi-select)
+    else if (event.ctrlKey || event.metaKey) {
+        if (selectedImages.has(filename)) {
+            selectedImages.delete(filename);
+        } else {
+            selectedImages.add(filename);
+        }
+        lastSelectedIndex = index;
+        displayImageList();
+    }
+    // Normal single selection toggle
+    else {
+        if (selectedImages.has(filename)) {
+            selectedImages.delete(filename);
+        } else {
+            selectedImages.add(filename);
+        }
+        lastSelectedIndex = index;
+        displayImageList();
     }
     
     updateBulkActionsVisibility();
+    updateSelectAllCheckbox();
+}
+
+// Handle select all checkbox
+function handleSelectAll(event) {
+    if (event.target.checked) {
+        // Select all filtered images
+        filteredImages.forEach(img => {
+            selectedImages.add(img.filename);
+        });
+    } else {
+        // Deselect all filtered images
+        filteredImages.forEach(img => {
+            selectedImages.delete(img.filename);
+        });
+    }
+    displayImageList();
+    updateBulkActionsVisibility();
+}
+
+// Update select all checkbox state
+function updateSelectAllCheckbox() {
+    const selectAllCheckbox = document.getElementById('selectAllCheckbox');
+    if (filteredImages.length === 0) {
+        selectAllCheckbox.checked = false;
+        selectAllCheckbox.indeterminate = false;
+    } else {
+        const selectedCount = filteredImages.filter(img => selectedImages.has(img.filename)).length;
+        if (selectedCount === 0) {
+            selectAllCheckbox.checked = false;
+            selectAllCheckbox.indeterminate = false;
+        } else if (selectedCount === filteredImages.length) {
+            selectAllCheckbox.checked = true;
+            selectAllCheckbox.indeterminate = false;
+        } else {
+            selectAllCheckbox.checked = false;
+            selectAllCheckbox.indeterminate = true;
+        }
+    }
 }
 
 // Update bulk actions visibility
 function updateBulkActionsVisibility() {
     const count = selectedImages.size;
     const selectedCountEl = document.getElementById('selectedCount');
-    const bulkAnnotateBtn = document.getElementById('bulkAnnotateBtn');
-    const bulkDeleteBtn = document.getElementById('bulkDeleteBtn');
+    const bulkActionButtons = document.getElementById('bulkActionButtons');
     
     if (count > 0) {
         selectedCountEl.textContent = `${count} selected`;
-        selectedCountEl.style.display = 'inline';
-        bulkAnnotateBtn.style.display = 'inline-block';
-        bulkDeleteBtn.style.display = 'inline-block';
+        bulkActionButtons.style.display = 'flex';
     } else {
-        selectedCountEl.style.display = 'none';
-        bulkAnnotateBtn.style.display = 'none';
-        bulkDeleteBtn.style.display = 'none';
+        bulkActionButtons.style.display = 'none';
     }
 }
 
 // Cycle sort order
-function cycleSortOrder() {
-    const orders = ['name-asc', 'name-desc', 'status-asc', 'status-desc'];
-    const currentIndex = orders.indexOf(sortOrder);
-    sortOrder = orders[(currentIndex + 1) % orders.length];
-    
-    const btn = document.getElementById('sortBtn');
-    const labels = {
-        'name-asc': 'Name ↑',
-        'name-desc': 'Name ↓',
-        'status-asc': 'Status ↑',
-        'status-desc': 'Status ↓'
-    };
-    btn.title = labels[sortOrder];
-    
+function handleSortChange(event) {
+    sortOrder = event.target.value;
     displayImageList();
 }
 
@@ -358,8 +657,6 @@ async function selectImage(filename) {
     
     currentImage = filename;
     hasUnsavedChanges = false;
-    showingVisualization = false;
-    showingPreprocessOverlay = false;
     selectedElementIndex = null;
     currentPreprocess = null;
     currentAnnotation = null;
@@ -380,9 +677,11 @@ async function selectImage(filename) {
     const img = document.getElementById('displayImage');
     img.src = `/api/image/${filename}`;
     
-    // Update toggle buttons
-    document.getElementById('toggleViewBtn').textContent = '👁️ Annotations';
-    document.getElementById('togglePreprocessOverlayBtn').textContent = '👁️ Detections';
+    // Update toggle buttons based on saved state
+    const btn = document.getElementById('toggleViewBtn');
+    const btn2 = document.getElementById('togglePreprocessOverlayBtn');
+    btn.textContent = showingVisualization ? '👁️ Hide Annotations' : '👁️ Show Annotations';
+    btn2.textContent = showingPreprocessOverlay ? '👁️ Hide Detections' : '👁️ Show Detections';
     
     // Clear detection list
     document.getElementById('detectionList').innerHTML = '<div class="no-data">No detections</div>';
@@ -640,10 +939,6 @@ async function deleteElement(index, event) {
 async function deleteCurrentImage() {
     if (!currentImage) return;
     
-    if (!confirm(`Delete "${currentImage}"? This cannot be undone.`)) {
-        return;
-    }
-    
     try {
         const response = await fetch(`/api/image/${currentImage}`, {
             method: 'DELETE'
@@ -787,6 +1082,7 @@ function toggleVisualization() {
     if (!currentImage || !currentAnnotation) return;
     
     showingVisualization = !showingVisualization;
+    localStorage.setItem('showingVisualization', showingVisualization);
     const btn = document.getElementById('toggleViewBtn');
     btn.textContent = showingVisualization ? '👁️ Hide Annotations' : '👁️ Show Annotations';
     drawAnnotations();
@@ -796,6 +1092,7 @@ function toggleVisualization() {
 function togglePreprocessOverlay() {
     if (!currentImage) return;
     showingPreprocessOverlay = !showingPreprocessOverlay;
+    localStorage.setItem('showingPreprocessOverlay', showingPreprocessOverlay);
     const btn2 = document.getElementById('togglePreprocessOverlayBtn');
     btn2.textContent = showingPreprocessOverlay ? '👁️ Hide Detections' : '👁️ Show Detections';
     drawAnnotations();
@@ -873,6 +1170,10 @@ async function uploadFiles(files, isFolder = false) {
     for (const file of files) {
         const formData = new FormData();
         formData.append('file', file);
+        
+        if (isFolder && file.webkitRelativePath) {
+            formData.append('relative_path', file.webkitRelativePath);
+        }
         
         try {
             const response = await fetch('/api/upload', {
