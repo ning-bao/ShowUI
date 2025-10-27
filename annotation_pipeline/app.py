@@ -2,10 +2,18 @@ from flask import Flask, render_template, request, jsonify, send_from_directory,
 from werkzeug.utils import secure_filename
 import os
 import json
+import shutil
 from pathlib import Path
 from dotenv import load_dotenv, find_dotenv
 from utils.annotator import GPTAnnotator
 from utils.visualizer import visualize_annotations
+try:
+    from . import db as dbm
+except Exception:
+    try:
+        from ShowUI.annotation_pipeline import db as dbm
+    except Exception:
+        import db as dbm
 import threading
 import queue
 import time
@@ -34,6 +42,7 @@ app.config['MAX_CONTENT_LENGTH'] = max_size_mb * 1024 * 1024
 # Ensure folders exist
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['ANNOTATION_FOLDER'], exist_ok=True)
+dbm.init_db()
 
 # Initialize annotator
 try:
@@ -169,6 +178,11 @@ class BatchJobManager:
             annotation_folder.mkdir(parents=True, exist_ok=True)
             with open(annotation_path, 'w') as f:
                 json.dump(annotation, f, indent=2)
+            try:
+                # mark annotated in DB
+                dbm.set_has_annotation(relative_path, True)
+            except Exception:
+                pass
             with self.lock:
                 job = self.jobs.get(job_id)
                 if job:
@@ -252,39 +266,62 @@ def index():
 
 @app.route('/api/images')
 def get_images():
-    """Get list of all images with their annotation status"""
+    """Get list of images with pagination, backed by SQLite. Falls back to FS if DB empty."""
+    # pagination params
+    try:
+        page = int(request.args.get('page', '1'))
+        page_size = int(request.args.get('page_size', '500'))
+        if page < 1:
+            page = 1
+        if page_size < 1:
+            page_size = 500
+        if page_size > 5000:
+            page_size = 5000
+    except Exception:
+        page, page_size = 1, 500
+
+    total = dbm.count_images()
+    if total == 0:
+        # First time: index from filesystem quickly and return
+        images = []
+        image_folder = Path(app.config['UPLOAD_FOLDER'])
+        annotation_folder = Path(app.config['ANNOTATION_FOLDER'])
+        for img_path in image_folder.rglob('*'):
+            if img_path.is_file() and img_path.suffix.lower() in ['.jpg', '.jpeg', '.png', '.gif', '.bmp']:
+                rel = str(img_path.relative_to(image_folder)).replace('\\', '/')
+                ann = annotation_folder / f"{img_path.stem}.json"
+                has_ann = ann.exists()
+                try:
+                    size_b = img_path.stat().st_size
+                except Exception:
+                    size_b = None
+                # upsert to DB
+                try:
+                    dbm.upsert_image(rel, has_annotation=has_ann, size_bytes=size_b)
+                except Exception:
+                    pass
+                images.append({'filename': rel, 'has_annotation': has_ann, 'annotation_path': str(ann) if has_ann else None})
+        total = len(images)
+        return jsonify({'images': images, 'total': total, 'page': 1, 'page_size': total})
+
+    offset = (page - 1) * page_size
+    rows = dbm.list_images(limit=page_size, offset=offset)
+    # Keep response shape backward compatible
     images = []
-    image_folder = Path(app.config['UPLOAD_FOLDER'])
-    annotation_folder = Path(app.config['ANNOTATION_FOLDER'])
-    
-    for img_path in image_folder.rglob('*'):
-        if img_path.is_file() and img_path.suffix.lower() in ['.jpg', '.jpeg', '.png', '.gif', '.bmp']:
-            relative_path = img_path.relative_to(image_folder)
-            annotation_path = annotation_folder / f"{img_path.stem}.json"
-            images.append({
-                'filename': str(relative_path).replace('\\', '/'),
-                'has_annotation': annotation_path.exists(),
-                'annotation_path': str(annotation_path) if annotation_path.exists() else None
-            })
-    
-    return jsonify({'images': images})
+    for r in rows:
+        images.append({
+            'filename': r['filename'],
+            'has_annotation': bool(r['has_annotation']),
+            'annotation_path': None,
+        })
+    return jsonify({'images': images, 'total': total, 'page': page, 'page_size': page_size})
 
 
 @app.route('/api/folders')
 def get_folders():
-    """Return a list of folder paths (relative) under the upload root, including empty folders."""
-    upload_root = Path(app.config['UPLOAD_FOLDER'])
-    folders = []
+    """Return a list of folder paths from the DB (including empty folders)."""
     try:
-        for dirpath, dirnames, filenames in os.walk(upload_root):
-            # Skip the root itself
-            if Path(dirpath) == upload_root:
-                # Include immediate empty root? We skip adding blank
-                pass
-            else:
-                rel = Path(dirpath).relative_to(upload_root)
-                # normalize to forward slashes
-                folders.append(str(rel).replace('\\', '/'))
+        folders = dbm.list_all_folders()
     except Exception:
         folders = []
     return jsonify({'folders': folders})
@@ -292,8 +329,12 @@ def get_folders():
 
 @app.route('/api/image/<path:filename>')
 def get_image(filename):
-    """Serve image file"""
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+    """Serve image file with caching headers"""
+    response = send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+    # Add cache headers to prevent image re-fetching
+    response.cache_control.max_age = 3600  # Cache for 1 hour
+    response.cache_control.public = True
+    return response
 
 
 @app.route('/api/annotation/<path:filename>')
@@ -331,6 +372,10 @@ def annotate_image(filename):
     with open(annotation_path, 'w') as f:
         json.dump(annotation, f, indent=2)
     
+    try:
+        dbm.set_has_annotation(str(filename), True)
+    except Exception:
+        pass
     return jsonify(annotation)
 
 
@@ -365,7 +410,10 @@ def delete_image(filename):
         # Delete annotation if exists
         if annotation_path.exists():
             annotation_path.unlink()
-        
+        try:
+            dbm.delete_image(str(filename))
+        except Exception:
+            pass
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'error': f'Failed to delete image: {str(e)}'}), 500
@@ -380,7 +428,10 @@ def update_annotation(filename):
     
     with open(annotation_path, 'w') as f:
         json.dump(annotation_data, f, indent=2)
-    
+    try:
+        dbm.set_has_annotation(str(filename), True)
+    except Exception:
+        pass
     return jsonify({'success': True})
 
 
@@ -427,7 +478,10 @@ def paste_annotation(filename):
         
         with open(annotation_path, 'w') as f:
             json.dump(pasted_data, f, indent=2)
-        
+        try:
+            dbm.set_has_annotation(str(filename), True)
+        except Exception:
+            pass
         return jsonify({'success': True, 'annotation': pasted_data})
         
     except json.JSONDecodeError as e:
@@ -506,7 +560,16 @@ def upload_file():
         file_path = Path(app.config['UPLOAD_FOLDER']) / filename
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file.save(str(file_path))
-        
+        try:
+            size_b = None
+            try:
+                size_b = file_path.stat().st_size
+            except Exception:
+                pass
+            ann_path = Path(app.config['ANNOTATION_FOLDER']) / f"{file_path.stem}.json"
+            dbm.upsert_image(filename, has_annotation=ann_path.exists(), size_bytes=size_b)
+        except Exception:
+            pass
         return jsonify({'success': True, 'filename': filename})
 
 
@@ -568,6 +631,131 @@ def batch_status(job_id):
 def batch_stream(job_id):
     stream = job_manager.sse_stream(job_id)
     return Response(stream, mimetype='text/event-stream')
+
+
+@app.route('/api/move-images', methods=['POST'])
+def move_images():
+    """Move images to a target folder."""
+    body = request.get_json(silent=True) or {}
+    filenames = body.get('filenames', [])
+    target_folder = body.get('target_folder', '').strip()
+    
+    if not filenames:
+        return jsonify({'error': 'No images selected'}), 400
+    
+    if not target_folder:
+        return jsonify({'error': 'No target folder specified'}), 400
+    
+    image_folder = Path(app.config['UPLOAD_FOLDER'])
+    annotation_folder = Path(app.config['ANNOTATION_FOLDER'])
+    target_path = image_folder / target_folder
+    
+    # Ensure target folder exists
+    target_path.mkdir(parents=True, exist_ok=True)
+    
+    moved_count = 0
+    errors = []
+    
+    for filename in filenames:
+        try:
+            source_path = image_folder / filename
+            if not source_path.exists():
+                errors.append(f'{filename}: not found')
+                continue
+            
+            # Get just the filename without any path
+            base_name = Path(filename).name
+            dest_path = target_path / base_name
+            
+            # Move the image file
+            shutil.move(str(source_path), str(dest_path))
+            
+            # Move annotation if it exists
+            ann_source = annotation_folder / f"{Path(filename).stem}.json"
+            if ann_source.exists():
+                ann_dest = annotation_folder / target_folder
+                ann_dest.mkdir(parents=True, exist_ok=True)
+                ann_dest_file = ann_dest / f"{Path(filename).stem}.json"
+                shutil.move(str(ann_source), str(ann_dest_file))
+            
+            # Update database
+            new_path = f"{target_folder}/{base_name}"
+            try:
+                dbm.delete_image(str(filename))
+                has_ann = (annotation_folder / target_folder / f"{Path(filename).stem}.json").exists()
+                dbm.upsert_image(new_path, has_annotation=has_ann)
+            except Exception as e:
+                print(f"DB update error for {filename}: {e}")
+            
+            moved_count += 1
+            
+        except Exception as e:
+            errors.append(f'{filename}: {str(e)}')
+            continue
+    
+    return jsonify({
+        'success': True,
+        'moved': moved_count,
+        'errors': errors
+    })
+
+
+@app.route('/api/export', methods=['POST'])
+def export_dataset():
+    """Export selected images to ShowUI-desktop format."""
+    import subprocess
+    import tempfile
+    
+    body = request.get_json(silent=True) or {}
+    filenames = body.get('filenames', [])
+    split_name = body.get('split', 'train')
+    
+    if not filenames:
+        return jsonify({'error': 'No images selected'}), 400
+    
+    # Create temporary output directory
+    output_dir = Path(tempfile.gettempdir()) / f'showui_export_{int(time.time())}'
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    try:
+        # Run export script
+        script_path = Path(__file__).parent / 'scripts' / 'export_showui_desktop.py'
+        images_path = Path(app.config['UPLOAD_FOLDER'])
+        annotations_path = Path(app.config['ANNOTATION_FOLDER'])
+        
+        result = subprocess.run(
+            [
+                'python3', str(script_path),
+                '--images', str(images_path),
+                '--annotations', str(annotations_path),
+                '--output', str(output_dir),
+                '--split', split_name
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300
+        )
+        
+        if result.returncode != 0:
+            return jsonify({
+                'error': 'Export failed',
+                'details': result.stderr
+            }), 500
+        
+        # Count exported files
+        exported_images = len(list((output_dir / 'images').rglob('*'))) if (output_dir / 'images').exists() else 0
+        
+        return jsonify({
+            'success': True,
+            'output_path': str(output_dir),
+            'exported_images': exported_images,
+            'message': f'Exported {exported_images} images to {output_dir}'
+        })
+        
+    except subprocess.TimeoutExpired:
+        return jsonify({'error': 'Export timeout'}), 500
+    except Exception as e:
+        return jsonify({'error': f'Export failed: {str(e)}'}), 500
 
 
 if __name__ == '__main__':

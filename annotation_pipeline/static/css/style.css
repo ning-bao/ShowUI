@@ -986,3 +986,82 @@ body {
 ::-webkit-scrollbar-thumb:hover {
     background: #9ca3af;
 }
+
+/* Drag and Drop Styles */
+.image-item.dragging {
+    opacity: 0.5;
+    cursor: move;
+}
+
+.image-item.selected {
+    background-color: #eff6ff;
+    border-color: var(--primary-color);
+}
+
+.folder-header.drag-over {
+    background-color: #dbeafe !important;
+    border: 2px dashed var(--primary-color);
+}
+
+.floating-progress {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background: white;
+    padding: 16px 20px;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    z-index: 10000;
+    min-width: 280px;
+}
+
+.floating-progress-content {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.floating-progress .spinner {
+    width: 24px;
+    height: 24px;
+    border: 3px solid #e5e7eb;
+    border-top-color: var(--primary-color);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+.floating-progress-text {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.floating-progress-text strong {
+    font-size: 14px;
+    color: var(--text-primary);
+}
+
+.floating-progress-text span {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.floating-progress.success .spinner {
+    display: none;
+}
+
+.floating-progress.success .floating-progress-text strong {
+    color: var(--success-color);
+}
+
+.floating-progress.error .spinner {
+    display: none;
+}
+
+.floating-progress.error .floating-progress-text strong {
+    color: var(--danger-color);
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}

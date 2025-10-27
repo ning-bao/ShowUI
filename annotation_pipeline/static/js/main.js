@@ -16,6 +16,7 @@ let viewMode = 'list'; // 'list' or 'folder'
 let expandedFolders = new Set();
 let batchEventSource = null;
 let allFolders = [];
+let selectMode = false; // Select mode for easier image selection
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', () => {
@@ -44,9 +45,9 @@ function setupEventListeners() {
     const folderModal = document.getElementById('folderModal');
     const createFolderBtn = document.getElementById('createFolderBtn');
     
-    uploadBtn.addEventListener('click', () => uploadModal.classList.add('active'));
-    uploadFolderBtn.addEventListener('click', () => folderModal.classList.add('active'));
-    createFolderBtn.addEventListener('click', createFolderPrompt);
+    if (uploadBtn && uploadModal) uploadBtn.addEventListener('click', () => uploadModal.classList.add('active'));
+    if (uploadFolderBtn && folderModal) uploadFolderBtn.addEventListener('click', () => folderModal.classList.add('active'));
+    if (createFolderBtn) createFolderBtn.addEventListener('click', createFolderPrompt);
     
     // Close modals
     document.querySelectorAll('.modal .close').forEach(closeBtn => {
@@ -62,66 +63,98 @@ function setupEventListeners() {
     });
     
     // Bulk actions
-    document.getElementById('bulkAnnotateBtn').addEventListener('click', bulkAnnotate);
-    document.getElementById('bulkDeleteBtn').addEventListener('click', bulkDelete);
+    const bulkAnnotateBtn = document.getElementById('bulkAnnotateBtn');
+    const bulkDeleteBtn = document.getElementById('bulkDeleteBtn');
+    const exportBtn = document.getElementById('exportBtn');
+    
+    if (bulkAnnotateBtn) bulkAnnotateBtn.addEventListener('click', bulkAnnotate);
+    if (bulkDeleteBtn) bulkDeleteBtn.addEventListener('click', bulkDelete);
+    if (exportBtn) exportBtn.addEventListener('click', exportDataset);
 
     // Batch annotate (all images) modal start
     const startBatchBtn = document.getElementById('startBatchBtn');
     if (startBatchBtn) startBatchBtn.addEventListener('click', startBatchAnnotation);
     
     // Sort select
-    document.getElementById('sortSelect').addEventListener('change', handleSortChange);
+    const sortSelect = document.getElementById('sortSelect');
+    if (sortSelect) sortSelect.addEventListener('change', handleSortChange);
     
     // File inputs
-    document.getElementById('fileInput').addEventListener('change', handleFileSelect);
-    document.getElementById('folderInput').addEventListener('change', handleFolderSelect);
+    const fileInput = document.getElementById('fileInput');
+    const folderInput = document.getElementById('folderInput');
+    if (fileInput) fileInput.addEventListener('change', handleFileSelect);
+    if (folderInput) folderInput.addEventListener('change', handleFolderSelect);
     
     // Drag and drop for single files
     const uploadArea = document.getElementById('uploadArea');
-    uploadArea.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        uploadArea.classList.add('dragover');
-    });
-    uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
-    uploadArea.addEventListener('drop', (e) => {
-        e.preventDefault();
-        uploadArea.classList.remove('dragover');
-        const files = e.dataTransfer.files;
-        if (files.length > 0) uploadFiles(Array.from(files));
-    });
+    if (uploadArea) {
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+        uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) uploadFiles(Array.from(files));
+        });
+    }
     
     // Action buttons
-    document.getElementById('annotateBtn').addEventListener('click', generateAnnotation);
-    document.getElementById('preprocessBtn').addEventListener('click', runPreprocess);
-    document.getElementById('toggleViewBtn').addEventListener('click', toggleVisualization);
-    document.getElementById('togglePreprocessOverlayBtn').addEventListener('click', togglePreprocessOverlay);
-    document.getElementById('saveBtn').addEventListener('click', saveAnnotation);
-    document.getElementById('deleteImageBtn').addEventListener('click', deleteCurrentImage);
+    const annotateBtn = document.getElementById('annotateBtn');
+    const preprocessBtn = document.getElementById('preprocessBtn');
+    const toggleViewBtn = document.getElementById('toggleViewBtn');
+    const togglePreprocessOverlayBtn = document.getElementById('togglePreprocessOverlayBtn');
+    const saveBtn = document.getElementById('saveBtn');
+    const deleteImageBtn = document.getElementById('deleteImageBtn');
+    
+    if (annotateBtn) annotateBtn.addEventListener('click', generateAnnotation);
+    if (preprocessBtn) preprocessBtn.addEventListener('click', runPreprocess);
+    if (toggleViewBtn) toggleViewBtn.addEventListener('click', toggleVisualization);
+    if (togglePreprocessOverlayBtn) togglePreprocessOverlayBtn.addEventListener('click', togglePreprocessOverlay);
+    if (saveBtn) saveBtn.addEventListener('click', saveAnnotation);
+    if (deleteImageBtn) deleteImageBtn.addEventListener('click', deleteCurrentImage);
     
     // Paste JSON
     const pasteJsonBtn = document.getElementById('pasteJsonBtn');
     const pasteJsonModal = document.getElementById('pasteJsonModal');
-    pasteJsonBtn.addEventListener('click', () => {
-        if (!currentImage) {
-            showToast('Please select an image first', 'error');
-            return;
-        }
-        document.getElementById('jsonInput').value = '';
-        document.getElementById('jsonError').style.display = 'none';
-        pasteJsonModal.classList.add('active');
-    });
-    document.getElementById('validateJsonBtn').addEventListener('click', validatePastedJson);
-    document.getElementById('applyJsonBtn').addEventListener('click', applyPastedJson);
+    const validateJsonBtn = document.getElementById('validateJsonBtn');
+    const applyJsonBtn = document.getElementById('applyJsonBtn');
+    
+    if (pasteJsonBtn && pasteJsonModal) {
+        pasteJsonBtn.addEventListener('click', () => {
+            if (!currentImage) {
+                showToast('Please select an image first', 'error');
+                return;
+            }
+            const jsonInput = document.getElementById('jsonInput');
+            const jsonError = document.getElementById('jsonError');
+            if (jsonInput) jsonInput.value = '';
+            if (jsonError) jsonError.style.display = 'none';
+            pasteJsonModal.classList.add('active');
+        });
+    }
+    if (validateJsonBtn) validateJsonBtn.addEventListener('click', validatePastedJson);
+    if (applyJsonBtn) applyJsonBtn.addEventListener('click', applyPastedJson);
     
     // Search and filter
-    document.getElementById('searchInput').addEventListener('input', filterImages);
-    document.getElementById('statusFilter').addEventListener('change', filterImages);
+    const searchInput = document.getElementById('searchInput');
+    const statusFilter = document.getElementById('statusFilter');
+    if (searchInput) searchInput.addEventListener('input', filterImages);
+    if (statusFilter) statusFilter.addEventListener('change', filterImages);
     
     // Select all checkbox
-    document.getElementById('selectAllCheckbox').addEventListener('change', handleSelectAll);
+    const selectAllCheckbox = document.getElementById('selectAllCheckbox');
+    if (selectAllCheckbox) selectAllCheckbox.addEventListener('change', handleSelectAll);
     
     // Toggle view mode
-    document.getElementById('toggleViewModeBtn').addEventListener('click', toggleViewMode);
+    const toggleViewModeBtn = document.getElementById('toggleViewModeBtn');
+    if (toggleViewModeBtn) toggleViewModeBtn.addEventListener('click', toggleViewMode);
+    
+    // Toggle select mode
+    const toggleSelectModeBtn = document.getElementById('toggleSelectModeBtn');
+    if (toggleSelectModeBtn) toggleSelectModeBtn.addEventListener('click', toggleSelectMode);
     
     // Close modals on outside click
     window.addEventListener('click', (e) => {
@@ -190,9 +223,10 @@ function setupSidebarResizer() {
 // Load images from server
 async function loadImages() {
     try {
-        const response = await fetch('/api/images');
+        // request larger page size to support bigger datasets without pagination UI changes
+        const response = await fetch('/api/images?page=1&page_size=5000');
         const data = await response.json();
-        allImages = data.images;
+        allImages = data.images || [];
 
         // Try to load folder list (to render empty folders in folder view)
         try {
@@ -216,8 +250,12 @@ async function loadImages() {
 // Display image list with filters
 function displayImageList() {
     const imageList = document.getElementById('imageList');
-    const searchTerm = document.getElementById('searchInput').value.toLowerCase();
-    const statusFilter = document.getElementById('statusFilter').value;
+    if (!imageList) return;
+    
+    const searchInput = document.getElementById('searchInput');
+    const statusFilterEl = document.getElementById('statusFilter');
+    const searchTerm = searchInput ? searchInput.value.toLowerCase() : '';
+    const statusFilter = statusFilterEl ? statusFilterEl.value : 'all';
     
     filteredImages = allImages.filter(img => {
         if (searchTerm && !img.filename.toLowerCase().includes(searchTerm)) {
@@ -268,19 +306,23 @@ function displayListView() {
     
     imageList.innerHTML = filteredImages.map((img, index) => {
         const escapedFilename = img.filename.replace(/'/g, "\\'");
+        const isSelected = selectedImages.has(img.filename);
         return `
-            <div class="image-item" data-filename="${img.filename}" data-index="${index}">
+            <div class="image-item ${isSelected ? 'selected' : ''}" 
+                 data-filename="${img.filename}" 
+                 data-index="${index}"
+                 draggable="${isSelected ? 'true' : 'false'}">
                 <div class="image-item-checkbox">
                     <input type="checkbox" 
                            data-filename="${img.filename}"
                            data-index="${index}"
-                           ${selectedImages.has(img.filename) ? 'checked' : ''}
+                           ${isSelected ? 'checked' : ''}
                            onclick="toggleImageSelection('${escapedFilename}', ${index}, event)">
                 </div>
-                <div class="image-item-thumb" onclick="selectImage('${escapedFilename}')">
+                <div class="image-item-thumb" onclick="handleImageClick('${escapedFilename}', ${index}, event)">
                     <img src="/api/image/${img.filename}" alt="${img.filename}" />
                 </div>
-                <div class="image-item-info" onclick="selectImage('${escapedFilename}')">
+                <div class="image-item-info" onclick="handleImageClick('${escapedFilename}', ${index}, event)">
                     <div class="image-item-name" title="${img.filename}">${img.filename}</div>
                     <div class="image-item-status">
                         <span class="status-badge ${img.has_annotation ? 'annotated' : 'not-annotated'}">
@@ -291,6 +333,9 @@ function displayListView() {
             </div>
         `;
     }).join('');
+    
+    // Setup drag events for selected images
+    setupImageDragEvents();
 }
 
 // Build folder tree structure
@@ -371,7 +416,18 @@ function displayFolderView() {
     const tree = buildFolderTree();
     ensureFoldersInTree(tree, allFolders);
     
-    imageList.innerHTML = renderFolderTree(tree, '');
+    const html = renderFolderTree(tree, '');
+    if (!html && Object.keys(tree).length === 0) {
+        imageList.innerHTML = '<div class="no-data">No folders or images</div>';
+    } else if (!html && tree['__root__']) {
+        // Only root files, render them
+        imageList.innerHTML = renderFiles(tree['__root__'].files);
+    } else {
+        imageList.innerHTML = html;
+    }
+    
+    // Setup drag and drop for folders after rendering
+    setupFolderDragAndDrop();
 }
 
 // Render folder tree recursively
@@ -379,7 +435,7 @@ function renderFolderTree(tree, path) {
     let html = '';
     
     // Sort folders and files
-    const folders = Object.keys(tree).filter(k => k !== '__root__' && tree[k].folders).sort();
+    const folders = Object.keys(tree).filter(k => k !== '__root__' && tree[k] && typeof tree[k] === 'object' && 'folders' in tree[k]).sort();
     
     for (const folderName of folders) {
         const folderData = tree[folderName];
@@ -388,24 +444,24 @@ function renderFolderTree(tree, path) {
         const fileCount = countFilesInFolder(folderData);
         const escapedPath = folderPath.replace(/'/g, "\\'");
         
-        html += `
-            <div class="folder-item">
-                <div class="folder-header" onclick="toggleFolder('${escapedPath}')">
-                    <span class="folder-toggle ${isExpanded ? 'expanded' : ''}">▶</span>
-                    <span class="folder-icon">📁</span>
-                    <span class="folder-name">${folderName}</span>
-                    <span class="folder-count">${fileCount}</span>
+            html += `
+                <div class="folder-item">
+                    <div class="folder-header" data-folder-path="${folderPath}" onclick="toggleFolder('${escapedPath}')">
+                        <span class="folder-toggle ${isExpanded ? 'expanded' : ''}">▶</span>
+                        <span class="folder-icon">📁</span>
+                        <span class="folder-name">${folderName}</span>
+                        <span class="folder-count">${fileCount}</span>
+                    </div>
+                    <div class="folder-children ${isExpanded ? 'expanded' : ''}">
+                        ${renderFolderTree(folderData.folders, folderPath)}
+                        ${renderFiles(folderData.files)}
+                    </div>
                 </div>
-                <div class="folder-children ${isExpanded ? 'expanded' : ''}">
-                    ${renderFolderTree(folderData.folders, folderPath)}
-                    ${renderFiles(folderData.files)}
-                </div>
-            </div>
-        `;
+            `;
     }
     
-    // Render root files
-    if (tree['__root__']) {
+    // Render root files at the end
+    if (tree['__root__'] && tree['__root__'].files && tree['__root__'].files.length > 0) {
         html += renderFiles(tree['__root__'].files);
     }
     
@@ -414,22 +470,28 @@ function renderFolderTree(tree, path) {
 
 // Render files
 function renderFiles(files) {
+    if (!files || files.length === 0) return '';
+    
     return files.map(img => {
         const displayName = img.displayName || img.filename;
         const escapedFilename = img.filename.replace(/'/g, "\\'");
+        const isSelected = selectedImages.has(img.filename);
         return `
-            <div class="image-item" data-filename="${img.filename}" data-index="${img.index}">
+            <div class="image-item ${isSelected ? 'selected' : ''}" 
+                 data-filename="${img.filename}" 
+                 data-index="${img.index}"
+                 draggable="${isSelected ? 'true' : 'false'}">
                 <div class="image-item-checkbox">
                     <input type="checkbox" 
                            data-filename="${img.filename}"
                            data-index="${img.index}"
-                           ${selectedImages.has(img.filename) ? 'checked' : ''}
+                           ${isSelected ? 'checked' : ''}
                            onclick="toggleImageSelection('${escapedFilename}', ${img.index}, event)">
                 </div>
-                <div class="image-item-thumb" onclick="selectImage('${escapedFilename}')">
+                <div class="image-item-thumb" onclick="handleImageClick('${escapedFilename}', ${img.index}, event)">
                     <img src="/api/image/${img.filename}" alt="${img.filename}" />
                 </div>
-                <div class="image-item-info" onclick="selectImage('${escapedFilename}')">
+                <div class="image-item-info" onclick="handleImageClick('${escapedFilename}', ${img.index}, event)">
                     <div class="image-item-name" title="${img.filename}">${displayName}</div>
                     <div class="image-item-status">
                         <span class="status-badge ${img.has_annotation ? 'annotated' : 'not-annotated'}">
@@ -467,13 +529,37 @@ function toggleFolder(path) {
 function toggleViewMode() {
     viewMode = viewMode === 'list' ? 'folder' : 'list';
     const btn = document.getElementById('toggleViewModeBtn');
-    if (viewMode === 'folder') {
-        btn.title = 'List View';
-        btn.textContent = '📋';
-    } else {
-        btn.title = 'Folder View';
-        btn.textContent = '🗂️';
+    if (btn) {
+        if (viewMode === 'folder') {
+            btn.title = 'List View';
+            btn.textContent = '📋';
+        } else {
+            btn.title = 'Folder View';
+            btn.textContent = '🗂️';
+        }
     }
+    displayImageList();
+}
+
+// Toggle select mode
+function toggleSelectMode() {
+    selectMode = !selectMode;
+    const btn = document.getElementById('toggleSelectModeBtn');
+    if (btn) {
+        if (selectMode) {
+            btn.classList.add('active');
+            btn.title = 'Exit Select Mode';
+            btn.style.backgroundColor = 'var(--primary-color)';
+            btn.style.color = 'white';
+            showToast('Select Mode: Click images to select, Shift+Click for range', 'info');
+        } else {
+            btn.classList.remove('active');
+            btn.title = 'Toggle Select Mode';
+            btn.style.backgroundColor = '';
+            btn.style.color = '';
+        }
+    }
+    // Update image items to make them draggable in select mode
     displayImageList();
 }
 
@@ -497,7 +583,7 @@ function toggleImageSelection(filename, index, event) {
                 selectedImages.add(filteredImages[i].filename);
             }
         }
-        displayImageList();
+        updateImageSelectionUI();
     }
     // Check for Ctrl/Cmd key (multi-select)
     else if (event.ctrlKey || event.metaKey) {
@@ -507,7 +593,7 @@ function toggleImageSelection(filename, index, event) {
             selectedImages.add(filename);
         }
         lastSelectedIndex = index;
-        displayImageList();
+        updateSingleImageUI(filename);
     }
     // Normal single selection toggle
     else {
@@ -517,7 +603,7 @@ function toggleImageSelection(filename, index, event) {
             selectedImages.add(filename);
         }
         lastSelectedIndex = index;
-        displayImageList();
+        updateSingleImageUI(filename);
     }
     
     updateBulkActionsVisibility();
@@ -537,13 +623,16 @@ function handleSelectAll(event) {
             selectedImages.delete(img.filename);
         });
     }
-    displayImageList();
+    updateImageSelectionUI();
     updateBulkActionsVisibility();
+    updateSelectAllCheckbox();
 }
 
 // Update select all checkbox state
 function updateSelectAllCheckbox() {
     const selectAllCheckbox = document.getElementById('selectAllCheckbox');
+    if (!selectAllCheckbox) return; // Element not found, skip update
+    
     if (filteredImages.length === 0) {
         selectAllCheckbox.checked = false;
         selectAllCheckbox.indeterminate = false;
@@ -567,6 +656,8 @@ function updateBulkActionsVisibility() {
     const count = selectedImages.size;
     const selectedCountEl = document.getElementById('selectedCount');
     const bulkActionButtons = document.getElementById('bulkActionButtons');
+    
+    if (!selectedCountEl || !bulkActionButtons) return; // Elements not found
     
     if (count > 0) {
         selectedCountEl.textContent = `${count} selected`;
@@ -1568,9 +1659,280 @@ function showToast(message, type = 'info') {
     }, 3000);
 }
 
-// Handle image load for canvas sizing
-document.getElementById('displayImage').addEventListener('load', function() {
-    if ((currentAnnotation && showingVisualization) || (currentPreprocess && showingPreprocessOverlay)) {
-        drawAnnotations();
+// Update single image UI without re-rendering
+function updateSingleImageUI(filename) {
+    const imageItem = document.querySelector(`.image-item[data-filename="${filename}"]`);
+    if (!imageItem) return;
+    
+    const isSelected = selectedImages.has(filename);
+    const checkbox = imageItem.querySelector('input[type="checkbox"]');
+    
+    // Update checkbox
+    if (checkbox) {
+        checkbox.checked = isSelected;
     }
-});
+    
+    // Update classes and draggable
+    if (isSelected) {
+        imageItem.classList.add('selected');
+        imageItem.draggable = true;
+    } else {
+        imageItem.classList.remove('selected');
+        imageItem.draggable = false;
+    }
+}
+
+// Update all image items UI without re-rendering
+function updateImageSelectionUI() {
+    const imageItems = document.querySelectorAll('.image-item');
+    imageItems.forEach(item => {
+        const filename = item.dataset.filename;
+        if (!filename) return;
+        
+        const isSelected = selectedImages.has(filename);
+        const checkbox = item.querySelector('input[type="checkbox"]');
+        
+        // Update checkbox
+        if (checkbox) {
+            checkbox.checked = isSelected;
+        }
+        
+        // Update classes and draggable
+        if (isSelected) {
+            item.classList.add('selected');
+            item.draggable = true;
+        } else {
+            item.classList.remove('selected');
+            item.draggable = false;
+        }
+    });
+    
+    // Re-setup drag events for newly draggable items
+    setupImageDragEvents();
+}
+
+// Handle image click based on mode
+function handleImageClick(filename, index, event) {
+    if (selectMode) {
+        // In select mode, click toggles selection
+        if (event && event.shiftKey && lastSelectedIndex !== -1) {
+            // Shift+click for range selection
+            const start = Math.min(lastSelectedIndex, index);
+            const end = Math.max(lastSelectedIndex, index);
+            for (let i = start; i <= end; i++) {
+                if (i < filteredImages.length) {
+                    if (selectedImages.has(filteredImages[i].filename)) {
+                        selectedImages.delete(filteredImages[i].filename);
+                    } else {
+                        selectedImages.add(filteredImages[i].filename);
+                    }
+                }
+            }
+            updateImageSelectionUI();
+        } else {
+            // Normal click toggles
+            if (selectedImages.has(filename)) {
+                selectedImages.delete(filename);
+            } else {
+                selectedImages.add(filename);
+            }
+            updateSingleImageUI(filename);
+        }
+        lastSelectedIndex = index;
+        updateBulkActionsVisibility();
+        updateSelectAllCheckbox();
+    } else {
+        // In normal mode, click selects the image for viewing
+        selectImage(filename);
+    }
+}
+
+// Setup drag events for images
+function setupImageDragEvents() {
+    const imageItems = document.querySelectorAll('.image-item[draggable="true"]');
+    imageItems.forEach(item => {
+        // Skip if already has drag listeners
+        if (item.dataset.dragListeners === 'true') return;
+        
+        item.addEventListener('dragstart', (e) => {
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', 'moving-images');
+            item.classList.add('dragging');
+        });
+        
+        item.addEventListener('dragend', (e) => {
+            item.classList.remove('dragging');
+        });
+        
+        item.dataset.dragListeners = 'true';
+    });
+}
+
+// Setup drag and drop for folders
+function setupFolderDragAndDrop() {
+    const folderHeaders = document.querySelectorAll('.folder-header');
+    folderHeaders.forEach(header => {
+        header.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            header.classList.add('drag-over');
+        });
+        
+        header.addEventListener('dragleave', (e) => {
+            header.classList.remove('drag-over');
+        });
+        
+        header.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            header.classList.remove('drag-over');
+            
+            // Get folder path from the data attribute
+            const targetFolder = header.dataset.folderPath;
+            
+            if (!targetFolder) {
+                showToast('Invalid folder', 'error');
+                return;
+            }
+            
+            if (selectedImages.size === 0) {
+                showToast('No images selected to move', 'error');
+                return;
+            }
+            
+            await moveImagesToFolder(Array.from(selectedImages), targetFolder);
+        });
+    });
+}
+
+// Move images to a folder
+async function moveImagesToFolder(filenames, targetFolder) {
+    if (!filenames || filenames.length === 0) return;
+    
+    const progressMsg = document.createElement('div');
+    progressMsg.className = 'floating-progress';
+    progressMsg.innerHTML = `
+        <div class="floating-progress-content">
+            <div class="spinner"></div>
+            <div class="floating-progress-text">
+                <strong>Moving images...</strong>
+                <span>0 / ${filenames.length}</span>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(progressMsg);
+    
+    try {
+        const response = await fetch('/api/move-images', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filenames, target_folder: targetFolder })
+        });
+        
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Move failed');
+        }
+        
+        const data = await response.json();
+        
+        progressMsg.querySelector('.floating-progress-text').innerHTML = `
+            <strong>✓ Complete!</strong>
+            <span>Moved ${data.moved} images</span>
+        `;
+        progressMsg.classList.add('success');
+        
+        setTimeout(() => {
+            progressMsg.remove();
+            selectedImages.clear();
+            loadImages();
+            showToast(`Moved ${data.moved} images to ${targetFolder}`, 'success');
+        }, 1500);
+        
+    } catch (error) {
+        console.error('Move error:', error);
+        progressMsg.querySelector('.floating-progress-text').innerHTML = `
+            <strong>✗ Move Failed</strong>
+            <span>${error.message}</span>
+        `;
+        progressMsg.classList.add('error');
+        setTimeout(() => progressMsg.remove(), 3000);
+    }
+}
+
+// Export dataset
+async function exportDataset() {
+    if (selectedImages.size === 0) {
+        showToast('No images selected for export', 'error');
+        return;
+    }
+    
+    const splitName = prompt('Enter dataset split name (e.g., train, val, test):', 'train');
+    if (!splitName) return;
+    
+    if (!confirm(`Export ${selectedImages.size} selected images as "${splitName}" split?`)) {
+        return;
+    }
+    
+    const progressMsg = document.createElement('div');
+    progressMsg.className = 'floating-progress';
+    progressMsg.innerHTML = `
+        <div class="floating-progress-content">
+            <div class="spinner"></div>
+            <div class="floating-progress-text">
+                <strong>Exporting Dataset...</strong>
+                <span>Processing ${selectedImages.size} images...</span>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(progressMsg);
+    
+    try {
+        const filenames = Array.from(selectedImages);
+        const response = await fetch('/api/export', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filenames, split: splitName })
+        });
+        
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Export failed');
+        }
+        
+        const data = await response.json();
+        
+        progressMsg.querySelector('.floating-progress-text').innerHTML = `
+            <strong>✓ Export Complete!</strong>
+            <span>Exported ${data.exported_images} images</span>
+        `;
+        progressMsg.classList.add('success');
+        
+        setTimeout(() => {
+            progressMsg.remove();
+            showToast(`Exported to: ${data.output_path}`, 'success');
+            
+            // Show detailed info
+            alert(`Export Complete!\n\nLocation: ${data.output_path}\nImages: ${data.exported_images}\nFormat: ShowUI-desktop`);
+        }, 2000);
+        
+    } catch (error) {
+        console.error('Export error:', error);
+        progressMsg.querySelector('.floating-progress-text').innerHTML = `
+            <strong>✗ Export Failed</strong>
+            <span>${error.message}</span>
+        `;
+        progressMsg.classList.add('error');
+        setTimeout(() => progressMsg.remove(), 3000);
+    }
+}
+
+// Handle image load for canvas sizing
+const displayImage = document.getElementById('displayImage');
+if (displayImage) {
+    displayImage.addEventListener('load', function() {
+        if ((currentAnnotation && showingVisualization) || (currentPreprocess && showingPreprocessOverlay)) {
+            drawAnnotations();
+        }
+    });
+}
