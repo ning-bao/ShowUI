@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, send_from_directory
+from flask import Flask, render_template, request, jsonify, send_from_directory, Response
 from werkzeug.utils import secure_filename
 import os
 import json
@@ -6,6 +6,11 @@ from pathlib import Path
 from dotenv import load_dotenv, find_dotenv
 from utils.annotator import GPTAnnotator
 from utils.visualizer import visualize_annotations
+import threading
+import queue
+import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Load environment variables robustly (works regardless of CWD)
 dotenv_path = find_dotenv(usecwd=True)
@@ -40,6 +45,205 @@ except ValueError as e:
     exit(1)
 
 
+########################
+# Batch Job Infrastructure
+########################
+
+class BatchJobManager:
+    def __init__(self, max_workers: int = None):
+        try:
+            max_workers_env = int(os.getenv('BATCH_MAX_WORKERS', '3'))
+        except Exception:
+            max_workers_env = 3
+        self.max_workers = max_workers if max_workers is not None else max_workers_env
+        self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
+        self.jobs = {}
+        self.job_events = {}
+        self.lock = threading.Lock()
+
+    def create_job(self, images: list, force: bool) -> str:
+        job_id = str(uuid.uuid4())
+        with self.lock:
+            self.jobs[job_id] = {
+                'status': 'running',
+                'total': len(images),
+                'completed': 0,
+                'success': 0,
+                'skipped': 0,
+                'errors': 0,
+                'results': [],
+                'force': force,
+                'created_at': time.time(),
+            }
+            self.job_events[job_id] = queue.Queue()
+
+        # submit tasks
+        for img in images:
+            self.executor.submit(self._process_image_task, job_id, img, force)
+
+        # also start a monitor thread to finalize when complete
+        threading.Thread(target=self._monitor_job_done, args=(job_id,), daemon=True).start()
+        return job_id
+
+    def _monitor_job_done(self, job_id: str):
+        # Wait until completed == total then send complete event
+        while True:
+            with self.lock:
+                job = self.jobs.get(job_id)
+                if not job:
+                    return
+                if job['completed'] >= job['total']:
+                    job['status'] = 'complete'
+                    self._emit(job_id, {
+                        'type': 'complete',
+                        'summary': {
+                            'total': job['total'],
+                            'success': job['success'],
+                            'skipped': job['skipped'],
+                            'errors': job['errors'],
+                        }
+                    })
+                    # small delay then close stream by placing a sentinel
+                    self._emit(job_id, {'type': 'end'})
+                    return
+            time.sleep(0.2)
+
+    def _emit(self, job_id: str, payload: dict):
+        q = self.job_events.get(job_id)
+        if q:
+            try:
+                q.put_nowait(payload)
+            except Exception:
+                pass
+
+    def _process_image_task(self, job_id: str, img_entry: dict, force: bool):
+        image_folder = Path(app.config['UPLOAD_FOLDER'])
+        annotation_folder = Path(app.config['ANNOTATION_FOLDER'])
+        img_path: Path = img_entry['path']
+        relative_path = str(img_path.relative_to(image_folder)).replace('\\', '/')
+        annotation_path = annotation_folder / f"{img_path.stem}.json"
+
+        # Skip logic
+        if annotation_path.exists() and not force:
+            with self.lock:
+                job = self.jobs.get(job_id)
+                if job:
+                    job['completed'] += 1
+                    job['skipped'] += 1
+                    job['results'].append({'filename': relative_path, 'status': 'skipped'})
+            self._emit(job_id, {
+                'type': 'image_done',
+                'filename': relative_path,
+                'status': 'skipped',
+                'completed': self.jobs.get(job_id, {}).get('completed', 0),
+                'total': self.jobs.get(job_id, {}).get('total', 0),
+            })
+            return
+
+        # Preprocess
+        try:
+            self._emit(job_id, {'type': 'preprocess_start', 'filename': relative_path})
+            hints = annotator._compute_preprocess_hints(str(img_path), max_elements=annotator.preprocess_max_elements)
+            self._emit(job_id, {'type': 'preprocessed', 'filename': relative_path, 'hints': len(hints)})
+        except Exception as e:
+            with self.lock:
+                job = self.jobs.get(job_id)
+                if job:
+                    job['completed'] += 1
+                    job['errors'] += 1
+                    job['results'].append({'filename': relative_path, 'status': 'error', 'error': f'Preprocess failed: {e}'})
+            self._emit(job_id, {
+                'type': 'image_done',
+                'filename': relative_path,
+                'status': 'error',
+                'error': f'Preprocess failed: {e}',
+                'completed': self.jobs.get(job_id, {}).get('completed', 0),
+                'total': self.jobs.get(job_id, {}).get('total', 0),
+            })
+            return
+
+        # Send OpenAI request with hints
+        try:
+            self._emit(job_id, {'type': 'request_sent', 'filename': relative_path})
+            annotation = annotator.annotate_with_hints(str(img_path), hints)
+            annotation_folder.mkdir(parents=True, exist_ok=True)
+            with open(annotation_path, 'w') as f:
+                json.dump(annotation, f, indent=2)
+            with self.lock:
+                job = self.jobs.get(job_id)
+                if job:
+                    job['completed'] += 1
+                    job['success'] += 1
+                    job['results'].append({'filename': relative_path, 'status': 'success'})
+            self._emit(job_id, {
+                'type': 'image_done',
+                'filename': relative_path,
+                'status': 'success',
+                'completed': self.jobs.get(job_id, {}).get('completed', 0),
+                'total': self.jobs.get(job_id, {}).get('total', 0),
+            })
+        except Exception as e:
+            with self.lock:
+                job = self.jobs.get(job_id)
+                if job:
+                    job['completed'] += 1
+                    job['errors'] += 1
+                    job['results'].append({'filename': relative_path, 'status': 'error', 'error': str(e)})
+            self._emit(job_id, {
+                'type': 'image_done',
+                'filename': relative_path,
+                'status': 'error',
+                'error': str(e),
+                'completed': self.jobs.get(job_id, {}).get('completed', 0),
+                'total': self.jobs.get(job_id, {}).get('total', 0),
+            })
+
+    def get_job(self, job_id: str):
+        with self.lock:
+            return dict(self.jobs.get(job_id, {}))
+
+    def sse_stream(self, job_id: str):
+        q = self.job_events.get(job_id)
+        if not q:
+            # empty stream end
+            def _gen_empty():
+                yield "event: end\n\n"
+            return _gen_empty()
+
+        def _gen():
+            # initial snapshot
+            with self.lock:
+                job = self.jobs.get(job_id)
+                if job:
+                    init_payload = {
+                        'type': 'init',
+                        'total': job['total'],
+                        'completed': job['completed'],
+                        'success': job['success'],
+                        'skipped': job['skipped'],
+                        'errors': job['errors'],
+                    }
+                    yield f"data: {json.dumps(init_payload)}\n\n"
+            # stream events
+            while True:
+                try:
+                    payload = q.get(timeout=15)
+                except Exception:
+                    # heartbeat to keep connection alive
+                    yield ": keep-alive\n\n"
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                if payload.get('type') == 'end':
+                    yield f"event: end\n\n"
+                    return
+                yield f"data: {json.dumps(payload)}\n\n"
+
+        return _gen()
+
+
+job_manager = BatchJobManager()
+
 @app.route('/')
 def index():
     """Render main page"""
@@ -66,13 +270,33 @@ def get_images():
     return jsonify({'images': images})
 
 
+@app.route('/api/folders')
+def get_folders():
+    """Return a list of folder paths (relative) under the upload root, including empty folders."""
+    upload_root = Path(app.config['UPLOAD_FOLDER'])
+    folders = []
+    try:
+        for dirpath, dirnames, filenames in os.walk(upload_root):
+            # Skip the root itself
+            if Path(dirpath) == upload_root:
+                # Include immediate empty root? We skip adding blank
+                pass
+            else:
+                rel = Path(dirpath).relative_to(upload_root)
+                # normalize to forward slashes
+                folders.append(str(rel).replace('\\', '/'))
+    except Exception:
+        folders = []
+    return jsonify({'folders': folders})
+
+
 @app.route('/api/image/<path:filename>')
 def get_image(filename):
     """Serve image file"""
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 
-@app.route('/api/annotation/<filename>')
+@app.route('/api/annotation/<path:filename>')
 def get_annotation(filename):
     """Get annotation for a specific image"""
     annotation_path = Path(app.config['ANNOTATION_FOLDER']) / f"{Path(filename).stem}.json"
@@ -303,44 +527,49 @@ def create_folder():
 
 @app.route('/api/batch-annotate', methods=['POST'])
 def batch_annotate():
-    """Annotate all images in the folder"""
+    """Start an asynchronous batch annotation job over all images. Returns a job_id."""
     image_folder = Path(app.config['UPLOAD_FOLDER'])
-    results = []
-    
-    for img_path in image_folder.rglob('*'):
-        if img_path.is_file() and img_path.suffix.lower() in ['.jpg', '.jpeg', '.png', '.gif', '.bmp']:
-            relative_path = img_path.relative_to(image_folder)
-            annotation_path = Path(app.config['ANNOTATION_FOLDER']) / f"{img_path.stem}.json"
-            
-            # Skip if already annotated (unless force flag is set)
-            force = request.json.get('force', False) if request.json else False
-            if annotation_path.exists() and not force:
-                results.append({
-                    'filename': str(relative_path).replace('\\', '/'),
-                    'status': 'skipped',
-                    'reason': 'already_annotated'
-                })
-                continue
-            
+    body = request.get_json(silent=True) or {}
+    force = body.get('force', False)
+
+    images = []
+    filenames = body.get('filenames')
+    if isinstance(filenames, list) and filenames:
+        # Limit to provided filenames
+        allowed_ext = {'.jpg', '.jpeg', '.png', '.gif', '.bmp'}
+        for name in filenames:
             try:
-                annotation = annotator.annotate(str(img_path))
-                with open(annotation_path, 'w') as f:
-                    json.dump(annotation, f, indent=2)
-                
-                results.append({
-                    'filename': str(relative_path).replace('\\', '/'),
-                    'status': 'success'
-                })
-            except Exception as e:
-                results.append({
-                    'filename': str(relative_path).replace('\\', '/'),
-                    'status': 'error',
-                    'error': str(e)
-                })
-    
-    return jsonify({'results': results})
+                # normalize path
+                p = image_folder / str(name)
+                if p.is_file() and p.suffix.lower() in allowed_ext:
+                    images.append({'path': p})
+            except Exception:
+                continue
+    else:
+        # All images
+        for img_path in image_folder.rglob('*'):
+            if img_path.is_file() and img_path.suffix.lower() in ['.jpg', '.jpeg', '.png', '.gif', '.bmp']:
+                images.append({'path': img_path})
+
+    job_id = job_manager.create_job(images, force)
+    job = job_manager.get_job(job_id)
+    return jsonify({'job_id': job_id, 'total': job.get('total', 0)})
+
+
+@app.route('/api/batch-annotate/status/<job_id>')
+def batch_status(job_id):
+    job = job_manager.get_job(job_id)
+    if not job:
+        return jsonify({'error': 'job_not_found'}), 404
+    return jsonify(job)
+
+
+@app.route('/api/batch-annotate/stream/<job_id>')
+def batch_stream(job_id):
+    stream = job_manager.sse_stream(job_id)
+    return Response(stream, mimetype='text/event-stream')
 
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=True, host='0.0.0.0', port=5000, threaded=True)
 

@@ -14,6 +14,8 @@ let lastSelectedIndex = -1;
 let filteredImages = [];
 let viewMode = 'list'; // 'list' or 'folder'
 let expandedFolders = new Set();
+let batchEventSource = null;
+let allFolders = [];
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', () => {
@@ -49,13 +51,23 @@ function setupEventListeners() {
     // Close modals
     document.querySelectorAll('.modal .close').forEach(closeBtn => {
         closeBtn.addEventListener('click', function() {
-            this.closest('.modal').classList.remove('active');
+            const modal = this.closest('.modal');
+            if (!modal) return;
+            modal.classList.remove('active');
+            if (modal.id === 'batchModal' && batchEventSource) {
+                try { batchEventSource.close(); } catch (_) {}
+                batchEventSource = null;
+            }
         });
     });
     
     // Bulk actions
     document.getElementById('bulkAnnotateBtn').addEventListener('click', bulkAnnotate);
     document.getElementById('bulkDeleteBtn').addEventListener('click', bulkDelete);
+
+    // Batch annotate (all images) modal start
+    const startBatchBtn = document.getElementById('startBatchBtn');
+    if (startBatchBtn) startBatchBtn.addEventListener('click', startBatchAnnotation);
     
     // Sort select
     document.getElementById('sortSelect').addEventListener('change', handleSortChange);
@@ -181,6 +193,19 @@ async function loadImages() {
         const response = await fetch('/api/images');
         const data = await response.json();
         allImages = data.images;
+
+        // Try to load folder list (to render empty folders in folder view)
+        try {
+            const foldersResp = await fetch('/api/folders');
+            if (foldersResp.ok) {
+                const foldersData = await foldersResp.json();
+                allFolders = Array.isArray(foldersData.folders) ? foldersData.folders : [];
+            } else {
+                allFolders = [];
+            }
+        } catch (_) {
+            allFolders = [];
+        }
         displayImageList();
     } catch (error) {
         console.error('Error loading images:', error);
@@ -221,6 +246,9 @@ function displayImageList() {
     
     if (filteredImages.length === 0) {
         imageList.innerHTML = '<div class="no-data">No images found</div>';
+        // Ensure bulk UI updates still occur even when nothing is listed
+        updateBulkActionsVisibility();
+        updateSelectAllCheckbox();
         return;
     }
     
@@ -299,6 +327,27 @@ function buildFolderTree() {
     return tree;
 }
 
+// Ensure that known folders (possibly empty) exist in the tree so users can expand them
+function ensureFoldersInTree(tree, folders) {
+    if (!Array.isArray(folders) || folders.length === 0) return;
+    for (const folderPath of folders) {
+        if (typeof folderPath !== 'string' || folderPath.trim() === '') continue;
+        const parts = folderPath.split('/');
+        let current = tree;
+        for (let i = 0; i < parts.length; i++) {
+            const folder = parts[i];
+            if (!current[folder]) {
+                current[folder] = { folders: {}, files: [] };
+            }
+            if (i === parts.length - 1) {
+                // last segment ensures existence; next loop handles children via .folders
+                break;
+            }
+            current = current[folder].folders;
+        }
+    }
+}
+
 // Get parent folder object
 function getParentFolder(tree, path) {
     let current = tree;
@@ -320,6 +369,7 @@ function getParentFolder(tree, path) {
 function displayFolderView() {
     const imageList = document.getElementById('imageList');
     const tree = buildFolderTree();
+    ensureFoldersInTree(tree, allFolders);
     
     imageList.innerHTML = renderFolderTree(tree, '');
 }
@@ -539,7 +589,8 @@ async function bulkAnnotate() {
     if (!confirm(`Annotate ${selectedImages.size} selected images?`)) {
         return;
     }
-    
+
+    // Use async batch API with SSE for the selected filenames
     const progressMsg = document.createElement('div');
     progressMsg.className = 'floating-progress';
     progressMsg.innerHTML = `
@@ -547,43 +598,79 @@ async function bulkAnnotate() {
             <div class="spinner"></div>
             <div class="floating-progress-text">
                 <strong>Bulk Annotating...</strong>
-                <span>0 / ${selectedImages.size}</span>
+                <span>Queued...</span>
             </div>
         </div>
     `;
     document.body.appendChild(progressMsg);
-    
-    let completed = 0;
-    const imagesToProcess = Array.from(selectedImages);
-    
-    for (const filename of imagesToProcess) {
-        try {
-            const response = await fetch(`/api/annotate/${filename}`, {
-                method: 'POST'
-            });
-            
-            if (response.ok) {
-                completed++;
-            }
-        } catch (error) {
-            console.error(`Error annotating ${filename}:`, error);
-        }
-        
-        progressMsg.querySelector('.floating-progress-text span').textContent = `${completed} / ${imagesToProcess.length}`;
+
+    try {
+        const filenames = Array.from(selectedImages);
+        const startResp = await fetch('/api/batch-annotate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filenames })
+        });
+        if (!startResp.ok) throw new Error('Failed to start batch');
+        const { job_id, total } = await startResp.json();
+        let completed = 0, success = 0, skipped = 0, errors = 0;
+
+        if (batchEventSource) { try { batchEventSource.close(); } catch(_){} batchEventSource = null; }
+        batchEventSource = new EventSource(`/api/batch-annotate/stream/${job_id}`);
+
+        batchEventSource.onmessage = (evt) => {
+            try {
+                const data = JSON.parse(evt.data);
+                if (data.type === 'image_done') {
+                    completed = data.completed;
+                    if (data.status === 'success') success++; else if (data.status === 'skipped') skipped++; else errors++;
+                    progressMsg.querySelector('.floating-progress-text span').textContent = `${completed}/${total} — ✓ ${success}, ○ ${skipped}, ✗ ${errors}`;
+                    if (data.filename && data.status === 'success') {
+                        const idx = allImages.findIndex(i => i.filename === data.filename);
+                        if (idx !== -1) {
+                            allImages[idx].has_annotation = true;
+                            displayImageList();
+                        }
+                    }
+                } else if (data.type === 'complete') {
+                    progressMsg.querySelector('.floating-progress-text').innerHTML = `
+                        <strong>✓ Complete!</strong>
+                        <span>✓ ${data.summary.success}, ○ ${data.summary.skipped}, ✗ ${data.summary.errors}</span>
+                    `;
+                    progressMsg.classList.add('success');
+                }
+            } catch (_) {}
+        };
+
+        batchEventSource.addEventListener('end', () => {
+            try { batchEventSource.close(); } catch(_){}
+            batchEventSource = null;
+            setTimeout(() => {
+                progressMsg.remove();
+                selectedImages.clear();
+                loadImages();
+                showToast('Bulk annotation complete', 'success');
+            }, 1200);
+        });
+
+        batchEventSource.onerror = () => {
+            try { batchEventSource.close(); } catch(_){}
+            batchEventSource = null;
+            progressMsg.querySelector('.floating-progress-text').innerHTML = `
+                <strong>✗ Failed</strong>
+                <span>Connection lost</span>
+            `;
+            progressMsg.classList.add('error');
+            setTimeout(() => progressMsg.remove(), 1500);
+        };
+    } catch (e) {
+        progressMsg.querySelector('.floating-progress-text').innerHTML = `
+            <strong>✗ Failed</strong>
+            <span>${e.message}</span>
+        `;
+        progressMsg.classList.add('error');
+        setTimeout(() => progressMsg.remove(), 1500);
     }
-    
-    progressMsg.querySelector('.floating-progress-text').innerHTML = `
-        <strong>✓ Complete!</strong>
-        <span>${completed} images annotated</span>
-    `;
-    progressMsg.classList.add('success');
-    
-    setTimeout(() => {
-        progressMsg.remove();
-        selectedImages.clear();
-        loadImages();
-        showToast(`Bulk annotated ${completed} images`, 'success');
-    }, 1500);
 }
 
 // Bulk delete
@@ -693,21 +780,34 @@ async function selectImage(filename) {
     
     // Wait for image to load
     img.onload = async () => {
-        // Load annotation if exists
-        try {
-            const response = await fetch(`/api/annotation/${filename}`);
-            if (response.ok) {
-                currentAnnotation = await response.json();
-                displayAnnotation();
-            } else {
+        // Load annotation if exists (avoid 404 spam if we know it's not annotated yet)
+        const meta = allImages.find(i => i.filename === filename);
+        if (meta && !meta.has_annotation) {
+            currentAnnotation = null;
+            displayNoAnnotation();
+        } else {
+            try {
+                const response = await fetch(`/api/annotation/${filename}`);
+                if (response.ok) {
+                    currentAnnotation = await response.json();
+                    displayAnnotation();
+                } else {
+                    currentAnnotation = null;
+                    displayNoAnnotation();
+                }
+            } catch (error) {
                 currentAnnotation = null;
                 displayNoAnnotation();
             }
-        } catch (error) {
-            currentAnnotation = null;
-            displayNoAnnotation();
         }
         
+        updateSaveButton();
+    };
+
+    img.onerror = () => {
+        // If image failed to load, still try to render empty panels safely
+        currentAnnotation = null;
+        displayNoAnnotation();
         updateSaveButton();
     };
 }
@@ -1134,6 +1234,7 @@ async function saveAnnotation() {
 // Update save button visibility
 function updateSaveButton() {
     const saveBtn = document.getElementById('saveBtn');
+    if (!saveBtn) return;
     saveBtn.style.display = hasUnsavedChanges ? 'inline-block' : 'none';
 }
 
@@ -1226,10 +1327,10 @@ async function startBatchAnnotation() {
     batchProgress.style.display = 'block';
     
     try {
-        batchStatus.textContent = 'Processing images...';
-        progressFill.style.width = '50%';
+        batchStatus.textContent = 'Starting batch job...';
+        progressFill.style.width = '0%';
         
-        const response = await fetch('/api/batch-annotate', {
+        const startResp = await fetch('/api/batch-annotate', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -1237,28 +1338,88 @@ async function startBatchAnnotation() {
             body: JSON.stringify({ force: force })
         });
         
-        if (response.ok) {
-            const data = await response.json();
-            progressFill.style.width = '100%';
-            
-            const success = data.results.filter(r => r.status === 'success').length;
-            const skipped = data.results.filter(r => r.status === 'skipped').length;
-            const errors = data.results.filter(r => r.status === 'error').length;
-            
-            batchStatus.textContent = `Complete! ${success} annotated, ${skipped} skipped, ${errors} errors`;
-            
+        if (!startResp.ok) {
+            throw new Error('Failed to start batch');
+        }
+        const { job_id, total } = await startResp.json();
+        let completed = 0;
+        let success = 0;
+        let skipped = 0;
+        let errors = 0;
+        let batchCompleted = false;
+        
+        if (batchEventSource) {
+            try { batchEventSource.close(); } catch (_) {}
+            batchEventSource = null;
+        }
+        
+        batchStatus.textContent = `Queued ${total} images...`;
+        
+        batchEventSource = new EventSource(`/api/batch-annotate/stream/${job_id}`);
+        
+        batchEventSource.onmessage = (evt) => {
+            try {
+                const data = JSON.parse(evt.data);
+                if (data.type === 'init') {
+                    // reset based on server totals
+                } else if (data.type === 'preprocess_start') {
+                    batchStatus.textContent = `Preprocessing ${data.filename}...`;
+                } else if (data.type === 'preprocessed') {
+                    batchStatus.textContent = `Sending ${data.filename} to OpenAI...`;
+                } else if (data.type === 'request_sent') {
+                    // no-op, keep status
+                } else if (data.type === 'image_done') {
+                    completed = data.completed;
+                    const pct = total > 0 ? Math.round((completed / total) * 100) : 100;
+                    progressFill.style.width = pct + '%';
+                    if (data.status === 'success') success++;
+                    else if (data.status === 'skipped') skipped++;
+                    else if (data.status === 'error') errors++;
+                    batchStatus.textContent = `${completed}/${total} done — ✓ ${success}, ○ ${skipped}, ✗ ${errors}`;
+                    // Update image list status optimistically
+                    if (data.filename) {
+                        const idx = allImages.findIndex(i => i.filename === data.filename);
+                        if (idx !== -1 && data.status === 'success') {
+                            allImages[idx].has_annotation = true;
+                            displayImageList();
+                        }
+                    }
+                } else if (data.type == 'complete') {
+                    progressFill.style.width = '100%';
+                    batchCompleted = true;
+                    batchStatus.textContent = `Complete! ✓ ${data.summary.success}, ○ ${data.summary.skipped}, ✗ ${data.summary.errors}`;
+                }
+            } catch (e) {
+                // ignore parse issues
+            }
+        };
+        
+        batchEventSource.addEventListener('end', () => {
+            try { batchEventSource.close(); } catch (_) {}
+            batchEventSource = null;
             setTimeout(() => {
                 document.getElementById('batchModal').classList.remove('active');
                 batchProgress.style.display = 'none';
                 progressFill.style.width = '0%';
                 btn.disabled = false;
-                
                 loadImages();
-                showToast(`Batch complete: ${success} images annotated`, 'success');
-            }, 2000);
-        } else {
-            throw new Error('Batch annotation failed');
-        }
+                showToast('Batch annotation complete', 'success');
+            }, 1200);
+        });
+        
+        batchEventSource.onerror = () => {
+            // If we've already received completion, don't mark as failed
+            if (batchCompleted) {
+                try { batchEventSource.close(); } catch (_) {}
+                batchEventSource = null;
+                return;
+            }
+            // Connection error - show neutral status
+            try { batchEventSource.close(); } catch (_) {}
+            batchEventSource = null;
+            batchStatus.textContent = 'Connection interrupted. Processing continues in background.';
+            btn.disabled = false;
+        };
     } catch (error) {
         console.error('Error in batch annotation:', error);
         batchStatus.textContent = 'Batch annotation failed!';

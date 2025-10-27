@@ -522,6 +522,15 @@ class GPTAnnotator:
         annotation = self._call_openai_api(image_path, width, height)
         return annotation
     
+    def annotate_with_hints(self, image_path: str, hints: List[dict]) -> dict:
+        """
+        Generate annotations for an image using OpenAI API with precomputed hints.
+        This avoids recomputing preprocessing inside the API call path.
+        """
+        with Image.open(image_path) as img:
+            width, height = img.size
+        return self._call_openai_api_with_hints(image_path, width, height, hints)
+    
     def _call_openai_api(self, image_path, width, height):
         """
         Call OpenAI API to annotate image
@@ -787,6 +796,221 @@ class GPTAnnotator:
             if 'element' not in annotation:
                 annotation['element'] = []
             return annotation
+
+    def _call_openai_api_with_hints(self, image_path, width, height, hints: List[dict]):
+        """
+        Same as _call_openai_api, but uses provided preprocessing hints and crops.
+        """
+        # Encode full image as base64
+        with open(image_path, 'rb') as f:
+            image_data = base64.b64encode(f.read()).decode('utf-8')
+        
+        image_ext = os.path.splitext(image_path)[1].lower()
+        mime_types = {
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.png': 'image/png',
+            '.gif': 'image/gif',
+            '.bmp': 'image/bmp'
+        }
+        mime_type = mime_types.get(image_ext, 'image/jpeg')
+        
+        # Build element crops once
+        element_crops: List[str] = []
+        try:
+            if hints:
+                element_crops = self._crop_elements(image_path, hints)
+                print(f"[Annotator] Cropped {len(element_crops)} element images (precomputed hints)")
+        except Exception as e:
+            print(f"[Annotator] Cropping with precomputed hints failed: {e}")
+            element_crops = []
+        
+        prompt = self._get_annotation_prompt(width, height, hints, element_crops)
+        
+        # Decide token parameter names and service tier support
+        model_lower = str(self.model).lower()
+        uses_completion_tokens = (model_lower.startswith('gpt-5') or model_lower.startswith('o3'))
+        token_param_name_chat = 'max_completion_tokens' if uses_completion_tokens else 'max_tokens'
+        token_param_name_resp = 'max_output_tokens'
+        allow_service_tier = uses_completion_tokens
+        
+        def build_request_kwargs_chat(token_limit: int):
+            content = [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_data}"}},
+            ]
+            for crop_data in element_crops:
+                content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{crop_data}"}
+                })
+            kwargs = {
+                "model": self.model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": content,
+                    }
+                ],
+                "response_format": {"type": "json_object"},
+            }
+            kwargs[token_param_name_chat] = self.max_completion_tokens
+            if allow_service_tier and self.service_tier:
+                kwargs["service_tier"] = self.service_tier
+            if self.timeout_seconds:
+                kwargs["timeout"] = self.timeout_seconds
+            return kwargs
+        
+        def build_request_kwargs_responses(token_limit: int, include_tools: bool = True):
+            resp_content = [
+                {"type": "input_text", "text": prompt},
+                {"type": "input_image", "image_url": f"data:{mime_type};base64,{image_data}"},
+            ]
+            for crop_data in element_crops:
+                resp_content.append({
+                    "type": "input_image",
+                    "image_url": f"data:image/png;base64,{crop_data}"
+                })
+            kwargs = {
+                "model": self.model,
+                "input": [
+                    {
+                        "role": "user",
+                        "content": resp_content,
+                    }
+                ],
+                "tool_choice": "auto",
+            }
+            if include_tools:
+                tool_def = {"type": "code_interpreter", "container": {"type": "auto"}}
+                kwargs["tools"] = [tool_def]
+            kwargs[token_param_name_resp] = self.max_completion_tokens
+            if allow_service_tier and self.service_tier:
+                kwargs["service_tier"] = self.service_tier
+            if self.timeout_seconds:
+                kwargs["timeout"] = self.timeout_seconds
+            return kwargs
+        
+        base_limit = int(self.max_completion_tokens)
+        attempts = [base_limit, min(max(base_limit * 2, 2048), 8192)]
+        response = None
+        last_error = None
+        for attempt_index, max_ct in enumerate(attempts):
+            try:
+                if self.use_code_interpreter:
+                    print(f"[Annotator] Sending request (responses+CI) with hints: model={self.model}, limit={max_ct}")
+                else:
+                    print(f"[Annotator] Sending request (chat) with hints: model={self.model}, limit={max_ct}")
+            except Exception:
+                pass
+            request_start = time.time()
+            try:
+                used_path = "chat"
+                if self.use_code_interpreter:
+                    try:
+                        response = self.client.responses.create(**build_request_kwargs_responses(max_ct, include_tools=True))
+                        used_path = "responses"
+                    except Exception as e_ci:
+                        err_msg = str(e_ci).lower()
+                        if "tools[0].container" in err_msg or "missing required parameter" in err_msg:
+                            print("[Annotator] CI not available without container. Retrying Responses API without tools...")
+                            response = self.client.responses.create(**build_request_kwargs_responses(max_ct, include_tools=False))
+                            used_path = "responses"
+                        elif isinstance(e_ci, TypeError):
+                            print(f"[Annotator] Responses API TypeError: {e_ci}. Falling back to Chat...")
+                            response = self.client.chat.completions.create(**build_request_kwargs_chat(max_ct))
+                            used_path = "chat"
+                        else:
+                            raise
+                else:
+                    response = self.client.chat.completions.create(**build_request_kwargs_chat(max_ct))
+                    used_path = "chat"
+                elapsed = time.time() - request_start
+                print(f"[Annotator] Response received via {used_path} in {elapsed:.1f}s (hints)")
+            except Exception as e:
+                elapsed = time.time() - request_start
+                print(f"[Annotator] Request failed after {elapsed:.1f}s: {e}")
+                last_error = e
+                break
+            
+            raw_response_serialized = None
+            try:
+                if hasattr(response, "model_dump"):
+                    raw_response_serialized = json.dumps(response.model_dump(), indent=2, default=str)
+                elif hasattr(response, "to_dict"):
+                    raw_response_serialized = json.dumps(response.to_dict(), indent=2, default=str)
+                else:
+                    raw_response_serialized = str(response)
+            except Exception:
+                raw_response_serialized = str(response)
+            
+            try:
+                if self.use_code_interpreter and used_path == "responses":
+                    finish_reason = getattr(response, "finish_reason", None)
+                    content = None
+                    try:
+                        content = getattr(response, "output_text", None)
+                    except Exception:
+                        content = None
+                    if not content:
+                        try:
+                            outputs = getattr(response, "output", None) or getattr(response, "outputs", None) or []
+                            texts = []
+                            for out in outputs:
+                                parts = getattr(out, "content", None) or getattr(out, "contents", None) or []
+                                for p in parts:
+                                    t = None
+                                    if hasattr(p, "text"):
+                                        t_obj = getattr(p, "text")
+                                        if isinstance(t_obj, str):
+                                            t = t_obj
+                                        else:
+                                            try:
+                                                t = getattr(t_obj, "value", None)
+                                            except Exception:
+                                                t = None
+                                    if isinstance(t, str) and t.strip():
+                                        texts.append(t)
+                            if texts:
+                                content = "\n".join(texts)
+                        except Exception:
+                            content = None
+                else:
+                    choice0 = response.choices[0]
+                    finish_reason = getattr(choice0, "finish_reason", None)
+                    content = choice0.message.content
+            except Exception as e:
+                print("[Annotator] Error accessing response content. Full response follows:")
+                print(raw_response_serialized)
+                raise RuntimeError(f"Failed to access response content: {e}")
+            
+            if (not content or str(content).strip() == "") and finish_reason == "length" and attempt_index == 0:
+                continue
+            
+            try:
+                annotation = json.loads(content)
+            except Exception as e:
+                if finish_reason == "length" and attempt_index == 0:
+                    continue
+                print("[Annotator] JSON parse failed (hints). Raw assistant content follows:")
+                try:
+                    preview = content if len(str(content)) < 4000 else (str(content)[:4000] + "... [truncated]")
+                except Exception:
+                    preview = "<unavailable>"
+                print(preview)
+                print("[Annotator] Full raw OpenAI response for debugging:")
+                print(raw_response_serialized)
+                raise RuntimeError(f"Failed to parse JSON from model response: {e}")
+            
+            if 'img_size' not in annotation:
+                annotation['img_size'] = [width, height]
+            if 'element' not in annotation:
+                annotation['element'] = []
+            return annotation
+        
+        if last_error is not None:
+            raise RuntimeError(f"OpenAI request failed: {last_error}")
+        raise RuntimeError("Annotation with hints failed after retries")
 
         # If we reached here, request failed entirely
         if last_error is not None:
