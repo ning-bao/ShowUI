@@ -35,14 +35,14 @@ except Exception:
     grounding_to_qwen = None
     dataset_mapping = {}
 
-# Local aliases to support new dataset names mapping to existing folders
+# Local aliases to support dataset name normalization
 try:
     if isinstance(dataset_mapping, dict):
         # Ensure canonical desktop mapping exists
         dataset_mapping.setdefault('showui-desktop', 'ShowUI-Desktop')
-        # New training dataset alias (same structure as ShowUI-Desktop)
-        dataset_mapping.setdefault('showui-train', 'ShowUI-Desktop')
-        dataset_mapping.setdefault('ShowUI-train', 'ShowUI-Desktop')
+        # New training dataset (same structure as ShowUI-Desktop, different data)
+        dataset_mapping['showui-train'] = 'ShowUI-train'
+        dataset_mapping['ShowUI-train'] = 'ShowUI-train'
 except Exception:
     pass
 
