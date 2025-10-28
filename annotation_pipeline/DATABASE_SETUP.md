@@ -164,3 +164,4 @@ Potential improvements:
 - [ ] Image thumbnails in database
 - [ ] Full-text search on annotations
 
+

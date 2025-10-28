@@ -3,6 +3,8 @@ from werkzeug.utils import secure_filename
 import os
 import json
 import shutil
+import tempfile
+import zipfile
 from pathlib import Path
 from dotenv import load_dotenv, find_dotenv
 from utils.annotator import GPTAnnotator
@@ -284,11 +286,18 @@ def get_images():
     if total == 0:
         # First time: index from filesystem quickly and return
         images = []
+        folders_found = set()
         image_folder = Path(app.config['UPLOAD_FOLDER'])
         annotation_folder = Path(app.config['ANNOTATION_FOLDER'])
         for img_path in image_folder.rglob('*'):
             if img_path.is_file() and img_path.suffix.lower() in ['.jpg', '.jpeg', '.png', '.gif', '.bmp']:
                 rel = str(img_path.relative_to(image_folder)).replace('\\', '/')
+                
+                # Track folder if image is in a subfolder
+                if '/' in rel:
+                    folder = rel.split('/')[0]
+                    folders_found.add(folder)
+                
                 ann = annotation_folder / f"{img_path.stem}.json"
                 has_ann = ann.exists()
                 try:
@@ -301,6 +310,19 @@ def get_images():
                 except Exception:
                     pass
                 images.append({'filename': rel, 'has_annotation': has_ann, 'annotation_path': str(ann) if has_ann else None})
+        
+        # Also index any empty folders
+        for item in image_folder.iterdir():
+            if item.is_dir():
+                folders_found.add(item.name)
+        
+        # Add folders to DB
+        for folder in folders_found:
+            try:
+                dbm.upsert_folder(folder)
+            except Exception:
+                pass
+        
         total = len(images)
         return jsonify({'images': images, 'total': total, 'page': 1, 'page_size': total})
 
@@ -322,7 +344,21 @@ def get_folders():
     """Return a list of folder paths from the DB (including empty folders)."""
     try:
         folders = dbm.list_all_folders()
-    except Exception:
+        
+        # If no folders in DB, scan filesystem and add them
+        if not folders:
+            image_folder = Path(app.config['UPLOAD_FOLDER'])
+            for item in image_folder.iterdir():
+                if item.is_dir():
+                    folder_name = item.name
+                    try:
+                        dbm.upsert_folder(folder_name)
+                        folders.append(folder_name)
+                    except Exception as e:
+                        print(f"Error adding folder {folder_name}: {e}")
+        
+    except Exception as e:
+        print(f"Error getting folders: {e}")
         folders = []
     return jsonify({'folders': folders})
 
@@ -340,10 +376,20 @@ def get_image(filename):
 @app.route('/api/annotation/<path:filename>')
 def get_annotation(filename):
     """Get annotation for a specific image"""
-    annotation_path = Path(app.config['ANNOTATION_FOLDER']) / f"{Path(filename).stem}.json"
+    # Preserve folder structure: ScreenSpot-v2/image.png -> ScreenSpot-v2/image.json
+    filename_path = Path(filename)
+    annotation_path = Path(app.config['ANNOTATION_FOLDER']) / filename_path.parent / f"{filename_path.stem}.json"
     
+    # Fallback: check old location (root of annotations folder) for backward compatibility
     if not annotation_path.exists():
-        return jsonify({'error': 'Annotation not found'}), 404
+        old_annotation_path = Path(app.config['ANNOTATION_FOLDER']) / f"{filename_path.stem}.json"
+        if old_annotation_path.exists():
+            # Migrate annotation to new location
+            annotation_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(old_annotation_path), str(annotation_path))
+            print(f"Migrated annotation: {old_annotation_path} -> {annotation_path}")
+        else:
+            return jsonify({'error': 'Annotation not found'}), 404
     
     with open(annotation_path, 'r') as f:
         annotation = json.load(f)
@@ -398,7 +444,9 @@ def preprocess_image(filename):
 def delete_image(filename):
     """Delete an image and its annotation"""
     image_path = Path(app.config['UPLOAD_FOLDER']) / filename
-    annotation_path = Path(app.config['ANNOTATION_FOLDER']) / f"{Path(filename).stem}.json"
+    # Preserve folder structure
+    filename_path = Path(filename)
+    annotation_path = Path(app.config['ANNOTATION_FOLDER']) / filename_path.parent / f"{filename_path.stem}.json"
     
     if not image_path.exists():
         return jsonify({'error': 'Image not found'}), 404
@@ -419,10 +467,13 @@ def delete_image(filename):
         return jsonify({'error': f'Failed to delete image: {str(e)}'}), 500
 
 
-@app.route('/api/annotation/<filename>', methods=['PUT'])
+@app.route('/api/annotation/<path:filename>', methods=['PUT'])
 def update_annotation(filename):
     """Update annotation for an image"""
-    annotation_path = Path(app.config['ANNOTATION_FOLDER']) / f"{Path(filename).stem}.json"
+    # Preserve folder structure
+    filename_path = Path(filename)
+    annotation_path = Path(app.config['ANNOTATION_FOLDER']) / filename_path.parent / f"{filename_path.stem}.json"
+    annotation_path.parent.mkdir(parents=True, exist_ok=True)
     
     annotation_data = request.json
     
@@ -435,7 +486,7 @@ def update_annotation(filename):
     return jsonify({'success': True})
 
 
-@app.route('/api/annotation/<filename>/paste', methods=['POST'])
+@app.route('/api/annotation/<path:filename>/paste', methods=['POST'])
 def paste_annotation(filename):
     """
     Create annotation from pasted JSON
@@ -473,8 +524,10 @@ def paste_annotation(filename):
             if not isinstance(elem['point'], list) or len(elem['point']) != 2:
                 return jsonify({'error': f'Element {idx} point must be [x, y]'}), 400
         
-        # Save the annotation
-        annotation_path = Path(app.config['ANNOTATION_FOLDER']) / f"{Path(filename).stem}.json"
+        # Save the annotation (preserve folder structure)
+        filename_path = Path(filename)
+        annotation_path = Path(app.config['ANNOTATION_FOLDER']) / filename_path.parent / f"{filename_path.stem}.json"
+        annotation_path.parent.mkdir(parents=True, exist_ok=True)
         
         with open(annotation_path, 'w') as f:
             json.dump(pasted_data, f, indent=2)
@@ -490,13 +543,21 @@ def paste_annotation(filename):
         return jsonify({'error': f'Error processing annotation: {str(e)}'}), 500
 
 
-@app.route('/api/annotation/<filename>/element/<int:element_index>', methods=['DELETE'])
+@app.route('/api/annotation/<path:filename>/element/<int:element_index>', methods=['DELETE'])
 def delete_element(filename, element_index):
     """Delete a specific element from annotation"""
-    annotation_path = Path(app.config['ANNOTATION_FOLDER']) / f"{Path(filename).stem}.json"
+    # Preserve folder structure
+    filename_path = Path(filename)
+    annotation_path = Path(app.config['ANNOTATION_FOLDER']) / filename_path.parent / f"{filename_path.stem}.json"
     
+    # Fallback: check old location for backward compatibility
     if not annotation_path.exists():
-        return jsonify({'error': 'Annotation not found'}), 404
+        old_annotation_path = Path(app.config['ANNOTATION_FOLDER']) / f"{filename_path.stem}.json"
+        if old_annotation_path.exists():
+            annotation_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(old_annotation_path), str(annotation_path))
+        else:
+            return jsonify({'error': 'Annotation not found'}), 404
     
     with open(annotation_path, 'r') as f:
         annotation = json.load(f)
@@ -512,17 +573,25 @@ def delete_element(filename, element_index):
     return jsonify({'error': 'Invalid element index'}), 400
 
 
-@app.route('/api/visualize/<filename>')
+@app.route('/api/visualize/<path:filename>')
 def visualize_image(filename):
     """Get visualized image with annotations"""
     image_path = Path(app.config['UPLOAD_FOLDER']) / filename
-    annotation_path = Path(app.config['ANNOTATION_FOLDER']) / f"{Path(filename).stem}.json"
+    # Preserve folder structure
+    filename_path = Path(filename)
+    annotation_path = Path(app.config['ANNOTATION_FOLDER']) / filename_path.parent / f"{filename_path.stem}.json"
     
     if not image_path.exists():
         return jsonify({'error': 'Image not found'}), 404
     
+    # Fallback: check old location for backward compatibility
     if not annotation_path.exists():
-        return jsonify({'error': 'Annotation not found'}), 404
+        old_annotation_path = Path(app.config['ANNOTATION_FOLDER']) / f"{filename_path.stem}.json"
+        if old_annotation_path.exists():
+            annotation_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(old_annotation_path), str(annotation_path))
+        else:
+            return jsonify({'error': 'Annotation not found'}), 404
     
     with open(annotation_path, 'r') as f:
         annotation = json.load(f)
@@ -583,6 +652,8 @@ def create_folder():
     folder_path = Path(app.config['UPLOAD_FOLDER']) / safe
     try:
         folder_path.mkdir(parents=True, exist_ok=True)
+        # Add folder to database so it shows up in folder view
+        dbm.upsert_folder(safe)
         return jsonify({'success': True, 'folder': str(safe)})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -667,22 +738,33 @@ def move_images():
             base_name = Path(filename).name
             dest_path = target_path / base_name
             
+            # Skip if source and destination are the same
+            if source_path.resolve() == dest_path.resolve():
+                continue
+            
+            # Check if destination already exists
+            if dest_path.exists():
+                errors.append(f'{base_name}: already exists in target folder')
+                continue
+            
             # Move the image file
             shutil.move(str(source_path), str(dest_path))
             
             # Move annotation if it exists
-            ann_source = annotation_folder / f"{Path(filename).stem}.json"
+            # Use the full relative path for annotation lookup
+            filename_path = Path(filename)
+            ann_source = annotation_folder / filename_path.parent / f"{filename_path.stem}.json"
             if ann_source.exists():
-                ann_dest = annotation_folder / target_folder
-                ann_dest.mkdir(parents=True, exist_ok=True)
-                ann_dest_file = ann_dest / f"{Path(filename).stem}.json"
+                ann_dest_dir = annotation_folder / target_folder
+                ann_dest_dir.mkdir(parents=True, exist_ok=True)
+                ann_dest_file = ann_dest_dir / f"{base_name.rsplit('.', 1)[0]}.json"
                 shutil.move(str(ann_source), str(ann_dest_file))
             
             # Update database
             new_path = f"{target_folder}/{base_name}"
             try:
                 dbm.delete_image(str(filename))
-                has_ann = (annotation_folder / target_folder / f"{Path(filename).stem}.json").exists()
+                has_ann = (annotation_folder / target_folder / f"{base_name.rsplit('.', 1)[0]}.json").exists()
                 dbm.upsert_image(new_path, has_annotation=has_ann)
             except Exception as e:
                 print(f"DB update error for {filename}: {e}")
@@ -702,60 +784,230 @@ def move_images():
 
 @app.route('/api/export', methods=['POST'])
 def export_dataset():
-    """Export selected images to ShowUI-desktop format."""
+    """Export selected images to specified format with optional zip."""
     import subprocess
     import tempfile
+    import zipfile
     
     body = request.get_json(silent=True) or {}
     filenames = body.get('filenames', [])
     split_name = body.get('split', 'train')
+    export_format = body.get('format', 'showui-desktop')
+    create_zip = body.get('create_zip', False)
     
     if not filenames:
         return jsonify({'error': 'No images selected'}), 400
     
     # Create temporary output directory
-    output_dir = Path(tempfile.gettempdir()) / f'showui_export_{int(time.time())}'
+    timestamp = int(time.time())
+    output_dir = Path(tempfile.gettempdir()) / f'{export_format}_export_{timestamp}'
     output_dir.mkdir(parents=True, exist_ok=True)
     
     try:
-        # Run export script
-        script_path = Path(__file__).parent / 'scripts' / 'export_showui_desktop.py'
-        images_path = Path(app.config['UPLOAD_FOLDER'])
-        annotations_path = Path(app.config['ANNOTATION_FOLDER'])
-        
-        result = subprocess.run(
-            [
-                'python3', str(script_path),
-                '--images', str(images_path),
-                '--annotations', str(annotations_path),
-                '--output', str(output_dir),
-                '--split', split_name
-            ],
-            capture_output=True,
-            text=True,
-            timeout=300
-        )
-        
-        if result.returncode != 0:
-            return jsonify({
-                'error': 'Export failed',
-                'details': result.stderr
-            }), 500
+        # Route to appropriate export script based on format
+        if export_format == 'showui-desktop':
+            script_path = Path(__file__).parent / 'scripts' / 'export_showui_desktop.py'
+            images_path = Path(app.config['UPLOAD_FOLDER'])
+            annotations_path = Path(app.config['ANNOTATION_FOLDER'])
+            
+            result = subprocess.run(
+                [
+                    'python3', str(script_path),
+                    '--images', str(images_path),
+                    '--annotations', str(annotations_path),
+                    '--output', str(output_dir),
+                    '--split', split_name,
+                    '--filenames', json.dumps(filenames)
+                ],
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+            
+            if result.returncode != 0:
+                print(f"Export script failed with return code {result.returncode}")
+                print(f"STDOUT: {result.stdout}")
+                print(f"STDERR: {result.stderr}")
+                return jsonify({
+                    'error': 'Export failed',
+                    'details': result.stderr or result.stdout or 'Unknown error'
+                }), 500
+        else:
+            # Placeholder for other export formats
+            return jsonify({'error': f'Export format "{export_format}" not implemented yet'}), 400
         
         # Count exported files
         exported_images = len(list((output_dir / 'images').rglob('*'))) if (output_dir / 'images').exists() else 0
         
-        return jsonify({
+        response_data = {
             'success': True,
             'output_path': str(output_dir),
             'exported_images': exported_images,
+            'format': export_format,
             'message': f'Exported {exported_images} images to {output_dir}'
-        })
+        }
+        
+        # Create zip if requested
+        if create_zip:
+            zip_path = Path(tempfile.gettempdir()) / f'{export_format}_{split_name}_{timestamp}.zip'
+            
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for root, dirs, files in os.walk(output_dir):
+                    for file in files:
+                        file_path = Path(root) / file
+                        arcname = file_path.relative_to(output_dir)
+                        zipf.write(file_path, arcname)
+            
+            zip_size = zip_path.stat().st_size
+            response_data['zip_path'] = str(zip_path)
+            response_data['zip_size'] = zip_size
+            response_data['zip_name'] = zip_path.name
+        
+        return jsonify(response_data)
         
     except subprocess.TimeoutExpired:
         return jsonify({'error': 'Export timeout'}), 500
     except Exception as e:
         return jsonify({'error': f'Export failed: {str(e)}'}), 500
+
+
+@app.route('/api/download-export')
+def download_export():
+    """Download exported dataset zip file."""
+    zip_path = request.args.get('path')
+    
+    if not zip_path:
+        return jsonify({'error': 'No zip path provided'}), 400
+    
+    zip_path = Path(zip_path)
+    
+    if not zip_path.exists():
+        return jsonify({'error': 'Export file not found'}), 404
+    
+    # Security check: ensure the file is in temp directory
+    if not str(zip_path).startswith(tempfile.gettempdir()):
+        return jsonify({'error': 'Invalid file path'}), 403
+    
+    try:
+        return send_from_directory(
+            zip_path.parent,
+            zip_path.name,
+            as_attachment=True,
+            download_name=zip_path.name
+        )
+    except Exception as e:
+        return jsonify({'error': f'Download failed: {str(e)}'}), 500
+
+
+@app.route('/api/deduplicate', methods=['POST'])
+def deduplicate_images():
+    """Remove duplicate images, keeping annotated versions."""
+    try:
+        images = dbm.list_images(limit=100000)
+        
+        # Group by base filename
+        from collections import defaultdict
+        filename_groups = defaultdict(list)
+        
+        for img in images:
+            base_name = Path(img['filename']).name
+            filename_groups[base_name].append(img)
+        
+        # Find duplicates and remove non-annotated ones
+        removed_count = 0
+        kept_count = 0
+        errors = []
+        
+        for base_name, group in filename_groups.items():
+            if len(group) <= 1:
+                continue
+            
+            # Sort by has_annotation (annotated first)
+            group.sort(key=lambda x: x['has_annotation'], reverse=True)
+            
+            # Keep the first one (most likely to be annotated)
+            to_keep = group[0]
+            to_remove = group[1:]
+            
+            kept_count += 1
+            
+            for img in to_remove:
+                try:
+                    filename = img['filename']
+                    image_path = Path(app.config['UPLOAD_FOLDER']) / filename
+                    filename_path = Path(filename)
+                    annotation_path = Path(app.config['ANNOTATION_FOLDER']) / filename_path.parent / f"{filename_path.stem}.json"
+                    
+                    # Delete files
+                    if image_path.exists():
+                        image_path.unlink()
+                    if annotation_path.exists():
+                        annotation_path.unlink()
+                    
+                    # Delete from database
+                    dbm.delete_image(str(filename))
+                    removed_count += 1
+                    
+                except Exception as e:
+                    errors.append(f'{img["filename"]}: {str(e)}')
+        
+        return jsonify({
+            'success': True,
+            'removed': removed_count,
+            'kept': kept_count,
+            'errors': errors
+        })
+        
+    except Exception as e:
+        return jsonify({'error': f'Deduplication failed: {str(e)}'}), 500
+
+
+@app.route('/api/folder/<path:folder_path>', methods=['DELETE'])
+def delete_folder(folder_path):
+    """Delete a folder and all its contents."""
+    try:
+        folder_full_path = Path(app.config['UPLOAD_FOLDER']) / folder_path
+        annotation_folder_path = Path(app.config['ANNOTATION_FOLDER']) / folder_path
+        
+        if not folder_full_path.exists():
+            return jsonify({'error': 'Folder not found'}), 404
+        
+        if not folder_full_path.is_dir():
+            return jsonify({'error': 'Not a folder'}), 400
+        
+        # Delete all images in database under this folder
+        images = dbm.list_images(limit=100000)
+        deleted_count = 0
+        
+        for img in images:
+            if img['filename'].startswith(folder_path + '/'):
+                try:
+                    dbm.delete_image(img['filename'])
+                    deleted_count += 1
+                except Exception:
+                    pass
+        
+        # Delete physical folders
+        if folder_full_path.exists():
+            shutil.rmtree(folder_full_path)
+        
+        if annotation_folder_path.exists():
+            shutil.rmtree(annotation_folder_path)
+        
+        # Delete folder from database
+        try:
+            dbm.delete_folder(folder_path)
+        except Exception:
+            pass
+        
+        return jsonify({
+            'success': True,
+            'deleted_images': deleted_count,
+            'message': f'Deleted folder and {deleted_count} images'
+        })
+        
+    except Exception as e:
+        return jsonify({'error': f'Delete failed: {str(e)}'}), 500
 
 
 if __name__ == '__main__':

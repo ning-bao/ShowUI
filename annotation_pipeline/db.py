@@ -140,6 +140,16 @@ def delete_image(rel_path: str):
     conn.close()
 
 
+def delete_folder(folder_path: str):
+    """Delete a folder from the database."""
+    folder_path = _normalize_path(folder_path).strip('/')
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute('DELETE FROM folders WHERE path = ?', (folder_path,))
+    conn.commit()
+    conn.close()
+
+
 def list_images(limit: int | None = None, offset: int | None = None):
     conn = get_conn()
     cur = conn.cursor()

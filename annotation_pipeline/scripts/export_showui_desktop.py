@@ -30,7 +30,7 @@ def normalize_point(point_abs, img_width, img_height):
     return [x / img_width, y / img_height]
 
 
-def export_to_showui_desktop(images_root, annotations_root, output_root, split='train'):
+def export_to_showui_desktop(images_root, annotations_root, output_root, split='train', filenames_filter=None):
     """
     Export annotations to ShowUI-desktop format.
     
@@ -39,6 +39,7 @@ def export_to_showui_desktop(images_root, annotations_root, output_root, split='
         annotations_root: Path to annotations folder
         output_root: Path to output ShowUI-desktop folder
         split: Dataset split name (train/val/test)
+        filenames_filter: Optional list of filenames to export (if None, export all)
     """
     images_root = Path(images_root)
     annotations_root = Path(annotations_root)
@@ -54,10 +55,16 @@ def export_to_showui_desktop(images_root, annotations_root, output_root, split='
     output_metadata.mkdir(parents=True, exist_ok=True)
     
     # Get all images from DB
-    all_images = dbm.list_images()
+    all_images = dbm.list_images(limit=100000)
     
     # Filter only annotated images
     annotated_images = [img for img in all_images if img['has_annotation']]
+    
+    # Apply filename filter if provided
+    if filenames_filter:
+        filenames_set = set(filenames_filter)
+        annotated_images = [img for img in annotated_images if img['filename'] in filenames_set]
+        print(f"Filtering to {len(annotated_images)} selected images")
     
     print(f"Found {len(annotated_images)} annotated images to export")
     
@@ -69,7 +76,10 @@ def export_to_showui_desktop(images_root, annotations_root, output_root, split='
     for img_record in annotated_images:
         filename = img_record['filename']
         img_path = images_root / filename
-        ann_path = annotations_root / f"{Path(filename).stem}.json"
+        
+        # Construct correct annotation path (respecting folder structure)
+        filename_path = Path(filename)
+        ann_path = annotations_root / filename_path.parent / f"{filename_path.stem}.json"
         
         if not img_path.exists():
             print(f"⚠️  Image not found: {filename}")
@@ -147,9 +157,9 @@ def export_to_showui_desktop(images_root, annotations_root, output_root, split='
     # Write metadata JSON (one record per line)
     metadata_file = output_metadata / f'hf_{split}.json'
     print(f"\nWriting metadata to {metadata_file}...")
+    # Write as a valid JSON array (instead of JSONL)
     with open(metadata_file, 'w') as f:
-        for record in export_records:
-            f.write(json.dumps(record) + '\n')
+        json.dump(export_records, f, ensure_ascii=False)
     
     # Try to write parquet if pandas/pyarrow available
     try:
@@ -233,19 +243,29 @@ def main():
     parser.add_argument('--annotations', default='data/annotations', help='Path to annotations folder')
     parser.add_argument('--output', required=True, help='Output directory for ShowUI-desktop format')
     parser.add_argument('--split', default='train', help='Dataset split name (train/val/test)')
+    parser.add_argument('--filenames', default=None, help='JSON array of filenames to export (optional)')
     args = parser.parse_args()
     
     # Initialize DB
     dbm.init_db()
     
+    # Parse filenames filter if provided
+    filenames_filter = None
+    if args.filenames:
+        try:
+            filenames_filter = json.loads(args.filenames)
+        except json.JSONDecodeError as e:
+            print(f"Error parsing filenames: {e}")
+            sys.exit(1)
+    
     export_to_showui_desktop(
         args.images,
         args.annotations,
         args.output,
-        args.split
+        args.split,
+        filenames_filter
     )
 
 
 if __name__ == '__main__':
     main()
-

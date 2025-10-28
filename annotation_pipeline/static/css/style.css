@@ -309,6 +309,38 @@ body {
     object-fit: cover;
 }
 
+/* Lazy loading states */
+.image-item-thumb img.lazy-image {
+    background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+    background-size: 200% 100%;
+    animation: loading-shimmer 1.5s infinite;
+}
+
+.image-item-thumb img.lazy-image.loading {
+    opacity: 0.6;
+}
+
+.image-item-thumb img.lazy-image.loaded {
+    background: none;
+    animation: none;
+    opacity: 1;
+    transition: opacity 0.3s ease-in;
+}
+
+.image-item-thumb img.lazy-image.error {
+    background: #fee;
+    opacity: 1;
+}
+
+@keyframes loading-shimmer {
+    0% {
+        background-position: 200% 0;
+    }
+    100% {
+        background-position: -200% 0;
+    }
+}
+
 .image-item-info {
     flex: 1;
     min-width: 0;
@@ -1064,4 +1096,95 @@ body {
 
 @keyframes spin {
     to { transform: rotate(360deg); }
+}
+
+/* Export Modal Styles */
+.success-message {
+    background-color: #f0fdf4;
+    border: 1px solid #86efac;
+    border-radius: 8px;
+    padding: 16px;
+    margin: 16px 0;
+}
+
+.success-message strong {
+    color: var(--success-color);
+    display: block;
+    margin-bottom: 8px;
+}
+
+.success-message p {
+    margin: 8px 0;
+    color: var(--text-primary);
+    font-size: 14px;
+}
+
+.help-text {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin: 4px 0 0 0;
+}
+
+.form-group {
+    margin-bottom: 16px;
+}
+
+.form-group label {
+    display: block;
+    font-weight: 500;
+    margin-bottom: 8px;
+    color: var(--text-primary);
+}
+
+/* Context Menu */
+.context-menu {
+    position: fixed;
+    background: white;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    z-index: 10000;
+    min-width: 180px;
+    padding: 4px 0;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.context-submenu {
+    position: fixed;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.context-menu-header {
+    padding: 6px 16px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    border-bottom: 1px solid var(--border-color);
+    background-color: var(--background);
+}
+
+.context-menu-item {
+    padding: 8px 16px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: background-color 0.15s;
+    position: relative;
+}
+
+.context-menu-item:hover {
+    background-color: var(--background);
+}
+
+.context-menu-item span {
+    font-size: 14px;
+    color: var(--text-primary);
+}
+
+.folder-header.selected {
+    background-color: #dbeafe;
+    border-left: 3px solid var(--primary-color);
 }
