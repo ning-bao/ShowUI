@@ -494,6 +494,11 @@ class XYFSM:
         self.tok = tokenizer
         # Build robust sets by scanning vocab for substrings (since many tokenizers use multi-char pieces)
         self.vocab = self.tok.get_vocab()
+        # Soft limits to prevent runaway numeric strings
+        self.max_digits_first = 6
+        self.max_digits_second = 6
+        self.max_chars_first = 12
+        self.max_chars_second = 12
         def ids_with(chars: str):
             wanted = set()
             for tok, idx in self.vocab.items():
@@ -523,20 +528,46 @@ class XYFSM:
         if ']' in after_lbr:
             # Already closed; only allow EOS to stop
             return set([self.eos_id]) if self.eos_id is not None else set(self.fallback_all)
+        import re as _re
+        def _digit_count(s: str) -> int:
+            return len(_re.findall(r"\d", s))
+        def _dot_count(s: str) -> int:
+            return s.count('.')
+        # Limit coordinate token lengths to avoid pathological sequences
         if ',' in after_lbr:
             # Second coordinate
+            second = after_lbr.split(',', 1)[1]
+            # consider up to the next bracket if any
+            seg = second.split(']')[0]
+            digits = _digit_count(seg)
+            dots = _dot_count(seg)
             allowed: Set[int] = set()
-            allowed |= self.digit_set
-            allowed |= self.space_set
-            allowed |= self.rbr_set
+            if dots >= 2 or digits >= self.max_digits_second or len(seg) >= self.max_chars_second:
+                # Force closure soon
+                allowed |= self.rbr_set
+                allowed |= self.space_set
+            else:
+                allowed |= self.digit_set
+                allowed |= self.space_set
+                allowed |= self.rbr_set
             return allowed if len(allowed) > 0 else set(self.fallback_all)
-        # First coordinate
-        allowed: Set[int] = set()
-        allowed |= self.digit_set
-        allowed |= self.comma_set
-        allowed |= self.space_set
-        allowed |= self.rbr_set
-        return allowed if len(allowed) > 0 else set(self.fallback_all)
+        else:
+            # First coordinate
+            seg = after_lbr
+            digits = _digit_count(seg)
+            dots = _dot_count(seg)
+            allowed: Set[int] = set()
+            if dots >= 2 or digits >= self.max_digits_first or len(seg) >= self.max_chars_first:
+                # Prefer moving on to comma or closing
+                allowed |= self.comma_set
+                allowed |= self.rbr_set
+                allowed |= self.space_set
+            else:
+                allowed |= self.digit_set
+                allowed |= self.comma_set
+                allowed |= self.space_set
+                allowed |= self.rbr_set
+            return allowed if len(allowed) > 0 else set(self.fallback_all)
 
 
 def make_prefix_allowed_tokens_fn(tokenizer):
