@@ -35,6 +35,17 @@ except Exception:
     grounding_to_qwen = None
     dataset_mapping = {}
 
+# Local aliases to support new dataset names mapping to existing folders
+try:
+    if isinstance(dataset_mapping, dict):
+        # Ensure canonical desktop mapping exists
+        dataset_mapping.setdefault('showui-desktop', 'ShowUI-Desktop')
+        # New training dataset alias (same structure as ShowUI-Desktop)
+        dataset_mapping.setdefault('showui-train', 'ShowUI-Desktop')
+        dataset_mapping.setdefault('ShowUI-train', 'ShowUI-Desktop')
+except Exception:
+    pass
+
 IGNORE_INDEX = -100
 
 
