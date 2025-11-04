@@ -271,6 +271,7 @@ def main():
     ap.add_argument("--out_dir", type=str, default="/root/ShowUI/training/analysis")
     ap.add_argument("--only_base", action="store_true", help="Evaluate only the base model at --base_model_dir")
     ap.add_argument("--base_model_dir", type=str, default=None, help="Directory of the base model to evaluate (requires config/tokenizer/model files)")
+    ap.add_argument("--base_model_name", type=str, default="showlab/ShowUI-2B", help="Hugging Face model id to use when --only_base is set and --base_model_dir is not provided")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -278,9 +279,13 @@ def main():
     max_pixels = args.max_visual_tokens * 28 * 28
 
     if args.only_base:
-        if not args.base_model_dir:
-            raise RuntimeError("--only_base requires --base_model_dir to be set")
-        ckpts = [(0, Path(args.base_model_dir))]
+        if args.base_model_dir:
+            base_ref = Path(args.base_model_dir)
+        else:
+            # Use HF model id; this will download if not cached
+            base_ref = args.base_model_name
+            print(f"Evaluating base model from Hugging Face: {base_ref}")
+        ckpts = [(0, base_ref)]
     else:
         ckpts = discover_checkpoints(Path(args.checkpoints_root))
         if not ckpts:
