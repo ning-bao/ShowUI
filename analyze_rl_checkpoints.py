@@ -131,6 +131,8 @@ def evaluate_checkpoint(ckpt_dir: Path, dataset_dir: str, limit: int, device: st
     items = load_screenspot_items(dataset_dir)
     # Filter by split
     if only_desktop:
+        print(it.get("split","") for it in items)
+        print("--------------------------------")
         items = [it for it in items if str(it.get("split","")).lower() == "desktop"]
         if not items:
             print("Warning: --only_desktop specified but no desktop items found in dataset; evaluating 0 samples.")
