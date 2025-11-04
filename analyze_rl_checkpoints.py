@@ -119,7 +119,7 @@ def load_screenspot_items(dataset_dir: str) -> List[dict]:
 # ---------- Evaluation on a checkpoint ----------
 @torch.no_grad()
 def evaluate_checkpoint(ckpt_dir: Path, dataset_dir: str, limit: int, device: str,
-                        min_pixels: int, max_pixels: int) -> Dict[str, float]:
+                        min_pixels: int, max_pixels: int, only_desktop: bool = False) -> Dict[str, float]:
     # Load processor/model from checkpoint folder
     processor = AutoProcessor.from_pretrained(str(ckpt_dir), min_pixels=min_pixels, max_pixels=max_pixels)
     model = Qwen2VLForConditionalGeneration.from_pretrained(str(ckpt_dir),
@@ -129,8 +129,14 @@ def evaluate_checkpoint(ckpt_dir: Path, dataset_dir: str, limit: int, device: st
 
 
     items = load_screenspot_items(dataset_dir)
-    # Prefer desktop-only if available
-    items = [it for it in items if str(it.get("split","")).lower() == "desktop"] or items
+    # Filter by split
+    if only_desktop:
+        items = [it for it in items if str(it.get("split","")).lower() == "desktop"]
+        if not items:
+            print("Warning: --only_desktop specified but no desktop items found in dataset; evaluating 0 samples.")
+    else:
+        # Prefer desktop if present; otherwise use all
+        items = [it for it in items if str(it.get("split","")).lower() == "desktop"] or items
     N = min(limit, len(items)) if (limit and limit > 0) else len(items)
 
     succ_bbox = 0
@@ -272,6 +278,7 @@ def main():
     ap.add_argument("--only_base", action="store_true", help="Evaluate only the base model at --base_model_dir")
     ap.add_argument("--base_model_dir", type=str, default=None, help="Directory of the base model to evaluate (requires config/tokenizer/model files)")
     ap.add_argument("--base_model_name", type=str, default="showlab/ShowUI-2B", help="Hugging Face model id to use when --only_base is set and --base_model_dir is not provided")
+    ap.add_argument("--only_desktop", action="store_true", help="Evaluate only desktop split samples")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -296,7 +303,7 @@ def main():
     dtb_by_epoch = {}
     for ep, cdir in ckpts:
         print(f"Evaluating epoch {ep} at {cdir} ...")
-        res = evaluate_checkpoint(cdir, args.dataset_dir, args.limit, device, min_pixels, max_pixels)
+        res = evaluate_checkpoint(cdir, args.dataset_dir, args.limit, device, min_pixels, max_pixels, args.only_desktop)
         row = {
             "epoch": ep,
             "n": res["n"],
