@@ -107,13 +107,134 @@ def within_r_or_bbox(px: float, py: float, bbox: Tuple[int,int,int,int], img_w: 
 
 
 # ---------- Data loading ----------
+def _read_json_or_jsonl(path: Path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+            if not content:
+                return []
+            if content.startswith("["):
+                return json.loads(content)
+            else:
+                items = []
+                for line in content.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        items.append(json.loads(line))
+                    except Exception:
+                        pass
+                return items
+    except Exception:
+        return []
+
+
+def load_screenspot_pro_items(dataset_dir: str) -> List[dict]:
+    root = Path(dataset_dir)
+    samples_path = root / "samples.json"
+    data_dir = root / "data"
+    if not samples_path.exists() or not data_dir.exists():
+        raise FileNotFoundError("ScreenSpot Pro format not found: expected samples.json and data/ under dataset_dir")
+
+    records = _read_json_or_jsonl(samples_path)
+    items = []
+    for rec in records:
+        try:
+            # filepath
+            fp = rec.get("filepath") or rec.get("file_path") or rec.get("path")
+            if fp is None:
+                # try relative from data
+                name = rec.get("filename") or rec.get("name")
+                if name:
+                    fp = str(data_dir / name)
+            fp = str(fp) if fp is not None else None
+            if fp is None:
+                continue
+            img_path = Path(fp)
+            if not img_path.is_absolute():
+                img_path = root / img_path
+
+            # size
+            md = rec.get("metadata") or {}
+            width = md.get("width") or md.get("pixel_width") or md.get("image_width")
+            height = md.get("height") or md.get("pixel_height") or md.get("image_height")
+            if not (width and height):
+                try:
+                    with Image.open(img_path) as im:
+                        width, height = im.size
+                except Exception:
+                    continue
+
+            # detection
+            det = rec.get("action_detection") or rec.get("detection") or {}
+            bbox_rel = det.get("bounding_box") or det.get("boundingBox") or det.get("bbox")
+            if not bbox_rel or len(bbox_rel) < 4:
+                continue
+            x_rel, y_rel, w_rel, h_rel = [float(v) for v in bbox_rel[:4]]
+            bbox_px = [int(round(x_rel * width)), int(round(y_rel * height)), int(round(w_rel * width)), int(round(h_rel * height))]
+
+            # task/instruction text
+            task = None
+            attrs = det.get("attributes") or {}
+            for key in ["instruction", "query", "text", "prompt", "description"]:
+                v = attrs.get(key)
+                if isinstance(v, dict) and "value" in v:
+                    v = v.get("value")
+                if isinstance(v, str) and v.strip():
+                    task = v.strip()
+                    break
+            if not task:
+                # try top-level fields
+                for key in ["instruction", "query", "text", "prompt", "description"]:
+                    v = rec.get(key)
+                    if isinstance(v, str) and v.strip():
+                        task = v.strip()
+                        break
+            if not task:
+                # fallback to detection label/context
+                label = det.get("label") or "target"
+                task = f"Click the element: {label}"
+
+            # platform split
+            platform = None
+            platform_obj = rec.get("platform") or {}
+            if isinstance(platform_obj, dict):
+                platform = platform_obj.get("label") or platform_obj.get("value")
+            raw = str(platform or "").lower()
+            desktop_aliases = {"desktop", "macos", "mac", "windows", "win", "linux", "ubuntu"}
+            mobile_aliases = {"mobile", "ios", "android"}
+            if raw in desktop_aliases:
+                split = "desktop"
+            elif raw in mobile_aliases:
+                split = "mobile"
+            else:
+                split = raw or "desktop"
+
+            items.append({
+                "img_path": str(img_path),
+                "img_size": [int(width), int(height)],
+                "bbox": bbox_px,
+                "task": task,
+                "split": split,
+                "platform": raw,
+            })
+        except Exception:
+            continue
+    return items
+
 def load_screenspot_items(dataset_dir: str) -> List[dict]:
     meta_path = Path(dataset_dir) / "ScreenSpot" / "metadata" / "hf_test_full.json"
-    if not meta_path.exists():
-        raise FileNotFoundError(f"Missing {meta_path}")
-    with open(meta_path) as f:
-        items = json.load(f)
-    return items
+    if meta_path.exists():
+        with open(meta_path) as f:
+            items = json.load(f)
+        return items
+    # Try ScreenSpot Pro auto-detect
+    pro_samples = Path(dataset_dir) / "samples.json"
+    pro_data = Path(dataset_dir) / "data"
+    if pro_samples.exists() and pro_data.exists():
+        return load_screenspot_pro_items(dataset_dir)
+    raise FileNotFoundError(f"Missing {meta_path} and no ScreenSpot Pro samples.json/data found under {dataset_dir}")
 
 
 # ---------- Evaluation on a checkpoint ----------
@@ -145,7 +266,12 @@ def evaluate_checkpoint(ckpt_dir: Path, dataset_dir: str, limit: int, device: st
 
     for i in range(N):
         it = items[i]
-        img_path = Path(dataset_dir) / "ScreenSpot" / "images" / it["img_url"]
+        if "img_path" in it:
+            img_path = Path(it["img_path"])
+            if not img_path.is_absolute():
+                img_path = Path(dataset_dir) / it["img_path"]
+        else:
+            img_path = Path(dataset_dir) / "ScreenSpot" / "images" / it["img_url"]
         if not img_path.exists():
             continue
         try:
