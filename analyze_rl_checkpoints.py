@@ -269,15 +269,22 @@ def main():
     ap.add_argument("--min_visual_tokens", type=int, default=256)
     ap.add_argument("--max_visual_tokens", type=int, default=1344)
     ap.add_argument("--out_dir", type=str, default="/root/ShowUI/training/analysis")
+    ap.add_argument("--only_base", action="store_true", help="Evaluate only the base model at --base_model_dir")
+    ap.add_argument("--base_model_dir", type=str, default=None, help="Directory of the base model to evaluate (requires config/tokenizer/model files)")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     min_pixels = args.min_visual_tokens * 28 * 28
     max_pixels = args.max_visual_tokens * 28 * 28
 
-    ckpts = discover_checkpoints(Path(args.checkpoints_root))
-    if not ckpts:
-        raise RuntimeError(f"No checkpoints found in {args.checkpoints_root}")
+    if args.only_base:
+        if not args.base_model_dir:
+            raise RuntimeError("--only_base requires --base_model_dir to be set")
+        ckpts = [(0, Path(args.base_model_dir))]
+    else:
+        ckpts = discover_checkpoints(Path(args.checkpoints_root))
+        if not ckpts:
+            raise RuntimeError(f"No checkpoints found in {args.checkpoints_root}")
     os.makedirs(args.out_dir, exist_ok=True)
 
     rows = []
