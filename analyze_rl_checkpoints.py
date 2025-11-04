@@ -113,19 +113,22 @@ def _read_json_or_jsonl(path: Path):
             content = f.read().strip()
             if not content:
                 return []
-            if content.startswith("["):
+            # First try to parse whole file as JSON (dict or list)
+            try:
                 return json.loads(content)
-            else:
-                items = []
-                for line in content.splitlines():
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        items.append(json.loads(line))
-                    except Exception:
-                        pass
-                return items
+            except Exception:
+                pass
+            # Fallback: JSONL
+            items = []
+            for line in content.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    items.append(json.loads(line))
+                except Exception:
+                    pass
+            return items
     except Exception:
         return []
 
@@ -138,6 +141,12 @@ def load_screenspot_pro_items(dataset_dir: str) -> List[dict]:
         raise FileNotFoundError("ScreenSpot Pro format not found: expected samples.json and data/ under dataset_dir")
 
     records = _read_json_or_jsonl(samples_path)
+    # Support top-level object with "samples" or similar
+    if isinstance(records, dict):
+        for key in ("samples", "items", "data", "records"):
+            if key in records and isinstance(records[key], list):
+                records = records[key]
+                break
     items = []
     for rec in records:
         try:
@@ -256,8 +265,8 @@ def evaluate_checkpoint(ckpt_dir: Path, dataset_dir: str, limit: int, device: st
         if not items:
             print("Warning: --only_desktop specified but no desktop items found in dataset; evaluating 0 samples.")
     else:
-        # Prefer desktop if present; otherwise use all
-        items = [it for it in items if str(it.get("split","")).lower() == "desktop"] or items
+        # Use all items
+        pass
     N = min(limit, len(items)) if (limit and limit > 0) else len(items)
 
     succ_bbox = 0
@@ -317,9 +326,11 @@ def evaluate_checkpoint(ckpt_dir: Path, dataset_dir: str, limit: int, device: st
                 succ_r[r] += 1
         dtb_all.append(dist_to_box(px, py, bbox, img_w, img_h))
 
-    eps = max(1, N)
+    # Number of successfully evaluated samples (with a valid prediction)
+    n_eval = len(dtb_all)
+    eps = max(1, n_eval)
     result = {
-        "n": N,
+        "n": n_eval,
         "success_bbox": succ_bbox / eps,
         "success_r4": succ_r[4] / eps,
         "success_r8": succ_r[8] / eps,
