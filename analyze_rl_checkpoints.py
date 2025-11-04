@@ -131,8 +131,6 @@ def evaluate_checkpoint(ckpt_dir: Path, dataset_dir: str, limit: int, device: st
     items = load_screenspot_items(dataset_dir)
     # Filter by split
     if only_desktop:
-        print(it.get("split","") for it in items)
-        print("--------------------------------")
         items = [it for it in items if str(it.get("split","")).lower() == "desktop"]
         if not items:
             print("Warning: --only_desktop specified but no desktop items found in dataset; evaluating 0 samples.")
@@ -273,7 +271,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--checkpoints_root", type=str, default="/root/ShowUI/training")
     ap.add_argument("--dataset_dir", type=str, required=True, help="Root directory that contains ScreenSpot/{images,metadata}")
-    ap.add_argument("--limit", type=int, default=200, help="Max examples to evaluate per checkpoint (0 = all)")
+    ap.add_argument("--limit", type=int, default=0, help="Max examples to evaluate per checkpoint (0 = all, default: 0)")
     ap.add_argument("--min_visual_tokens", type=int, default=256)
     ap.add_argument("--max_visual_tokens", type=int, default=1344)
     ap.add_argument("--out_dir", type=str, default="/root/ShowUI/training/analysis")
