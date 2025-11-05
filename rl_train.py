@@ -1349,8 +1349,21 @@ def main():
             writer.add_scalar("eval/screenspot_subset_success_epoch", sr, epoch)
         print(f"Epoch {epoch+1} eval subset success: {sr:.4f}")
 
-        # periodic save
-        if ((epoch + 1) % args.save_every_epochs == 0):
+        # Save best at end-of-epoch as well (so we have a best even if mid-epoch evals are infrequent)
+        if args.save_best and sr > best_sr:
+            best_sr = sr
+            save_dir = os.path.join(os.getcwd(), f"rl_ckpt_best")
+            os.makedirs(save_dir, exist_ok=True)
+            model_to_save = model.module if hasattr(model, "module") else model
+            try:
+                torch.save(model_to_save.state_dict(), os.path.join(save_dir, "pytorch_model.bin"))
+                model_to_save.config.to_json_file(os.path.join(save_dir, "config.json"))
+            except Exception as e:
+                print(f"Best save failed: {e}")
+            processor.save_pretrained(save_dir)
+
+        # periodic save (guard against 0)
+        if int(getattr(args, "save_every_epochs", 0)) > 0 and ((epoch + 1) % int(args.save_every_epochs) == 0):
             save_dir = os.path.join(os.getcwd(), f"rl_ckpt_epoch{epoch+1}")
             os.makedirs(save_dir, exist_ok=True)
             model_to_save = model.module if hasattr(model, "module") else model

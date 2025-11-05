@@ -225,6 +225,38 @@ def evaluate_checkpoint(model_dir: Path, dataset_dir: Path, limit: int,
     }
 
 
+# --------------------------- Cleanup Helpers --------------------------- #
+
+def cleanup_run_artifacts(run_dir: Path, keep_best: bool = True, remove_tb: bool = False) -> None:
+    """Remove large intermediate artifacts to save disk.
+    - Deletes all rl_ckpt_epoch* directories
+    - Deletes optimizer.pt and training_state.json if present
+    - Optionally removes TensorBoard logs
+    Keeps rl_ckpt_best by default.
+    """
+    try:
+        # Remove per-epoch checkpoints
+        for p in run_dir.glob("rl_ckpt_epoch*"):
+            shutil.rmtree(p, ignore_errors=True)
+        # Remove optimizer/training state files wherever present under run_dir
+        for p in run_dir.rglob("optimizer.pt"):
+            try:
+                p.unlink()
+            except Exception:
+                pass
+        for p in run_dir.rglob("training_state.json"):
+            try:
+                p.unlink()
+            except Exception:
+                pass
+        if remove_tb:
+            tb = run_dir / "tb"
+            if tb.exists():
+                shutil.rmtree(tb, ignore_errors=True)
+    except Exception:
+        pass
+
+
 # --------------------------- Experiment Plan --------------------------- #
 
 FULL_BASE = {
@@ -262,11 +294,14 @@ FULL_BASE = {
     "--safety_kl_multiplier": 5.0,
     "--safety_temp_floor": 0.3,
     "--safety_temp_decay": 0.5,
+    # Storage control: disable periodic epoch saves; rely on best-only
+    "--save_every_epochs": 0,
 }
 
 FULL_FLAGS_TRUE = {
     "--save_best": True,
-    "--save_optimizer": True,
+    # Avoid saving optimizer to reduce disk usage
+    "--save_optimizer": False,
     "--do_sample": True,
 }
 
@@ -503,6 +538,9 @@ def main():
             per_seed_metrics["succ"].append(row["succ_pct"])  # % values
             per_seed_metrics["invalid"].append(row["invalid_pct"])  # % values
             per_seed_metrics["l2"].append(row["l2_mean"])  # absolute
+
+            # Storage cleanup: remove intermediate checkpoints and optimizer files
+            cleanup_run_artifacts(run_dir, keep_best=True, remove_tb=False)
 
         # Aggregate over seeds
         if per_seed_metrics["succ"]:
