@@ -294,8 +294,8 @@ PRETTY = {
 def build_cmd(train_script: Path, dataset_dir: Path, outdir: Path, seed: int,
               base: Dict[str, object], flags_true: Dict[str, bool], overrides: Dict[str, object],
               overrides_true: Dict[str, bool]) -> List[str]:
-    cmd = [sys.executable, str(train_script),
-           "--dataset_dir", str(dataset_dir),
+    cmd = [sys.executable, str(train_script.resolve()),
+           "--dataset_dir", str(dataset_dir.resolve()),
            "--train_dataset", "showui-desktop", "--train_json", "hf_train",
            "--model_id", "showlab/ShowUI-2B",
            "--log_dir", str(outdir / "tb"),
