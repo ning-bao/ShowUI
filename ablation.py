@@ -206,6 +206,14 @@ def evaluate_checkpoint(model_dir: Path, dataset_dir: Path, limit: int,
     succ_pct = 100.0 * succ / max(1, n_items)
     invalid_pct = 100.0 * invalid / max(1, n_items)
     l2_mean = l2_sum / max(1, valid_count)
+    
+    # Cleanup GPU memory
+    del model
+    del proc
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+    
     return {
         "succ_pct": succ_pct,
         "invalid_pct": invalid_pct,
@@ -231,7 +239,7 @@ FULL_BASE = {
     "--eval_split": "hf_test_full",
     # Eval cadence
     "--eval_subset_limit": 400,
-    "--eval_every_steps": 200,
+    "--eval_every_steps": 10000,  # Effectively disable mid-epoch eval (only eval at epoch end)
     # RL knobs
     "--tau_success": 0.08,
     "--tau_success_end": 0.06,
@@ -398,10 +406,23 @@ def main():
 
         for seed in args.seeds:
             run_dir = vdir / f"seed{seed}"
-            if run_dir.exists() and any(run_dir.iterdir()):
-                print(f"[INFO] Reusing existing run dir: {run_dir}")
-            else:
-                run_dir.mkdir(parents=True, exist_ok=True)
+            run_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Check if already completed
+            eval_json = run_dir / "eval.json"
+            if eval_json.exists():
+                print(f"[SKIP] {vname} seed {seed} already evaluated, loading results...")
+                try:
+                    with open(eval_json) as f:
+                        row = json.load(f)
+                    results_rows.append(row)
+                    per_seed_metrics["succ"].append(row["succ_pct"])
+                    per_seed_metrics["invalid"].append(row["invalid_pct"])
+                    per_seed_metrics["l2"].append(row["l2_mean"])
+                    print(f"[LOADED] {vname} seed {seed}: succ={row['succ_pct']:.2f}%, l2={row['l2_mean']:.4f}")
+                    continue
+                except Exception as e:
+                    print(f"[WARN] Failed to load {eval_json}: {e}. Re-running...")
 
             # Compose command
             cmd = build_cmd(args.train_script, args.dataset_dir, run_dir, seed,
@@ -411,6 +432,11 @@ def main():
             t0 = time.time()
             rc = run(cmd, cwd=run_dir)
             t_train = time.time() - t0
+            
+            # Wait for GPU memory to be fully released by the subprocess
+            print("[GPU] Waiting 5 seconds for GPU memory cleanup...")
+            time.sleep(5)
+            
             if rc != 0:
                 print(f"[ERROR] Training failed for {vname} seed {seed} (rc={rc}). Skipping eval.")
                 continue
@@ -431,6 +457,10 @@ def main():
                 max_visual_tokens=int(FULL_BASE["--max_visual_tokens"]),
                 env_filter="desktop",
             )
+            
+            # Wait after evaluation for GPU cleanup
+            print("[GPU] Waiting 3 seconds after evaluation...")
+            time.sleep(3)
 
             row = {
                 "variant": vname,
