@@ -383,6 +383,27 @@ def main():
     if not has_reward_ema_beta and "no_ema" in VARIANTS:
         print("[WARN] --reward_ema_beta not supported by the training script; skipping 'no_ema' ablation.")
 
+    # Load existing results if they exist (for resuming/appending)
+    per_run_csv = args.base_outdir / "per_run_results.csv"
+    existing_results = {}  # key: (variant, seed) -> row dict
+    if per_run_csv.exists():
+        try:
+            with open(per_run_csv, "r") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    # Convert numeric fields back
+                    for k in ["seed", "n_items", "n_valid", "n_succ", "n_invalid"]:
+                        if k in row:
+                            row[k] = int(row[k])
+                    for k in ["succ_pct", "invalid_pct", "l2_mean", "train_time_sec"]:
+                        if k in row:
+                            row[k] = float(row[k])
+                    key = (row["variant"], row["seed"])
+                    existing_results[key] = row
+            print(f"[LOAD] Found {len(existing_results)} existing results in {per_run_csv}")
+        except Exception as e:
+            print(f"[WARN] Could not load existing results: {e}")
+
     results_rows = []  # per-run rows
     summary_rows = []  # per-variant mean±CI
 
@@ -500,26 +521,63 @@ def main():
                 "n_seeds": len(per_seed_metrics["succ"]),
             })
 
-    # Write per-run CSV
-    per_run_csv = args.base_outdir / "per_run_results.csv"
-    if results_rows:
+    # Merge new results with existing results
+    all_results = dict(existing_results)  # Start with existing
+    for row in results_rows:
+        key = (row["variant"], row["seed"])
+        all_results[key] = row  # Update/add new results
+    
+    # Convert to list for CSV
+    all_results_list = sorted(all_results.values(), key=lambda x: (x["variant"], x["seed"]))
+    
+    # Recompute summary from ALL available results (not just this run)
+    summary_by_variant = {}
+    for row in all_results_list:
+        vname = row["variant"]
+        if vname not in summary_by_variant:
+            summary_by_variant[vname] = {"succ": [], "invalid": [], "l2": []}
+        summary_by_variant[vname]["succ"].append(row["succ_pct"])
+        summary_by_variant[vname]["invalid"].append(row["invalid_pct"])
+        summary_by_variant[vname]["l2"].append(row["l2_mean"])
+    
+    # Build new summary rows from complete data
+    summary_rows_complete = []
+    for vname, metrics in summary_by_variant.items():
+        if metrics["succ"]:
+            m_succ, ci_succ = ci95(metrics["succ"])
+            m_inv, ci_inv = ci95(metrics["invalid"])
+            m_l2, ci_l2 = ci95(metrics["l2"])
+            summary_rows_complete.append({
+                "variant": vname,
+                "variant_pretty": PRETTY.get(vname, vname),
+                "succ_pct_mean": m_succ,
+                "succ_pct_ci": ci_succ,
+                "l2_mean": m_l2,
+                "l2_ci": ci_l2,
+                "invalid_pct_mean": m_inv,
+                "invalid_pct_ci": ci_inv,
+                "n_seeds": len(metrics["succ"]),
+            })
+    
+    # Write per-run CSV with ALL results
+    if all_results_list:
         with open(per_run_csv, "w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=list(results_rows[0].keys()))
-            w.writeheader(); w.writerows(results_rows)
-        print(f"[WRITE] {per_run_csv}")
+            w = csv.DictWriter(f, fieldnames=list(all_results_list[0].keys()))
+            w.writeheader(); w.writerows(all_results_list)
+        print(f"[WRITE] {per_run_csv} ({len(all_results_list)} runs total)")
 
-    # Write summary CSV + JSON
+    # Write summary CSV + JSON with complete statistics
     summary_csv = args.base_outdir / "summary.csv"
     summary_json = args.base_outdir / "summary.json"
-    if summary_rows:
+    if summary_rows_complete:
         with open(summary_csv, "w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=list(summary_rows[0].keys()))
-            w.writeheader(); w.writerows(summary_rows)
-        json.dump(summary_rows, open(summary_json, "w"), indent=2)
+            w = csv.DictWriter(f, fieldnames=list(summary_rows_complete[0].keys()))
+            w.writeheader(); w.writerows(summary_rows_complete)
+        json.dump(summary_rows_complete, open(summary_json, "w"), indent=2)
         print(f"[WRITE] {summary_csv}\n[WRITE] {summary_json}")
 
-    # LaTeX table
-    if summary_rows:
+    # LaTeX table (use complete summary with all seeds)
+    if summary_rows_complete:
         # order rows as defined in PRETTY mapping
         def sort_key(r):
             order = list(PRETTY.keys())
@@ -527,7 +585,7 @@ def main():
                 return order.index(r["variant"]) if r["variant"] in order else 999
             except Exception:
                 return 999
-        summary_rows_sorted = sorted(summary_rows, key=sort_key)
+        summary_rows_sorted = sorted(summary_rows_complete, key=sort_key)
 
         def fmt_pm(m, ci, prec=2):
             return f"{m:.{prec}f} \\pm {ci:.{prec}f}"
