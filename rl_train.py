@@ -868,6 +868,8 @@ def main():
     parser.add_argument("--log_hist_every", type=int, default=100)
     parser.add_argument("--save_best", action="store_true")
     parser.add_argument("--warmup_steps", type=int, default=200)
+    parser.add_argument("--reward_ema_beta", type=float, default=0.9, help="EMA beta for reward baseline (0=no smoothing, 1=frozen)")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     parser.add_argument("--stats_jsonl", type=str, default="", help="Path to JSONL file to append per-step stats")
     # Stability / control args
     parser.add_argument("--max_grad_norm", type=float, default=1.0)
@@ -926,6 +928,8 @@ def main():
         log_hist_every=args_ns.log_hist_every,
         save_best=args_ns.save_best,
         warmup_steps=args_ns.warmup_steps,
+        reward_ema_beta=args_ns.reward_ema_beta,
+        seed=args_ns.seed,
         stats_jsonl=args_ns.stats_jsonl,
         eval_envs=args_ns.eval_envs,
         eval_types=args_ns.eval_types,
