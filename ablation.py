@@ -304,6 +304,7 @@ def build_cmd(train_script: Path, dataset_dir: Path, outdir: Path, seed: int,
           ]
     # Compose flags
     def append_kv(d: Dict[str, object]):
+        nonlocal cmd
         for k, v in d.items():
             if isinstance(v, bool):
                 if v:
@@ -509,7 +510,7 @@ def main():
             "\\renewcommand{\\arraystretch}{1.08}",
             "\\begin{tabular}{lccc}",
             "\\toprule",
-            "\\textbf{Variant} & \\textbf{Succ (\%)} & \\textbf{L2} & \\textbf{Invalid (\%)} \\",
+            "\\textbf{Variant} & \\textbf{Succ (\\%)} & \\textbf{L2} & \\textbf{Invalid (\\%)} \\\\",
             "\\midrule",
         ]
         for r in summary_rows_sorted:
@@ -517,7 +518,7 @@ def main():
                 f"{r['variant_pretty']} & "
                 f"{fmt_pm(r['succ_pct_mean'], r['succ_pct_ci'], 2)} & "
                 f"{fmt_pm(r['l2_mean'], r['l2_ci'], 4)} & "
-                f"{fmt_pm(r['invalid_pct_mean'], r['invalid_pct_ci'], 2)} \\\""
+                f"{fmt_pm(r['invalid_pct_mean'], r['invalid_pct_ci'], 2)} \\\\"
             )
         lines += [
             "\\bottomrule",
