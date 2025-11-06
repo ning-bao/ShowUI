@@ -363,7 +363,6 @@ def build_cmd(help_text: str, train_script: Path, dataset_dir: Path, outdir: Pat
            "--log_dir", str(outdir / "tb"),
            "--eval_envs", "desktop",
            "--stats_jsonl", str(outdir / "stats.jsonl"),
-           "--save_best", "True",
     ]
 
     def maybe_add_flag(k: str, v: object):
