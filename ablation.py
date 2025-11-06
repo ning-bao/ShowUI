@@ -1,31 +1,10 @@
 #!/usr/bin/env python3
 """
 ablation_best.py — Storage-aware, resume-safe ablation study orchestrator for rl_train_optimized.py
-
-Key features:
-- Meaningful variants only (affecting your current training code)
-- Proper greedy-only vs sampling behavior
-- End-of-epoch periodic eval for save_best (small subset), single final greedy eval (larger subset)
-- Minimal disk usage (delete TB logs, per-epoch ckpts; keep only best ckpt per run temporarily)
-- Optional keep ONLY the single global-best ckpt across all runs
-- Zero-shot baseline (ShowUI-2B) and optional user baseline directory
-
-Usage (example):
-python ablation.py \
-  --train_script ~/ShowUI/rl_train_optimized.py \
-  --dataset_dir "$DATA_DIR" \
-  --base_outdir ~/ShowUI/ablation_runs \
-  --train_dataset showui-train --train_json hf_train \
-  --epochs 20 --steps_per_epoch 200 \
-  --final_eval_limit 334 \
-  --seeds 42 2025 \
-  --keep_global_best_ckpt \
-  --user_baseline_dir /path/to/your/previous/rl_ckpt_best  # optional
-
-Tips:
-- If eval is very slow, consider lowering --final_eval_limit (e.g., 250) and keep it consistent across all runs.
-- Disk: the script deletes per-epoch ckpts and TB logs. It evaluates each run’s rl_ckpt_best and then deletes it,
-  unless --keep_global_best_ckpt is set (keeps only the top-1 overall).
+Now with:
+- Global progress bar (tqdm if available; graceful fallback otherwise)
+- Clear step logging (baselines, per-run train/eval/cleanup, writes)
+- Plan/variant listing at start; --list_only to print plan and exit
 """
 
 from __future__ import annotations
@@ -46,6 +25,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
+# -------- tqdm (progress bars) with graceful fallback -------- #
+try:
+    from tqdm import tqdm
+except Exception:
+    class _DummyTQDM:
+        def __init__(self, total=None, desc=None, unit=None, leave=True): self.n=0
+        def update(self, n=1): self.n += n
+        def close(self): pass
+    def tqdm(*a, **k): return _DummyTQDM()
+
 # --------------------------- Helpers --------------------------- #
 
 def run(cmd: List[str], cwd: Path) -> int:
@@ -64,7 +53,6 @@ def _get_help_flags(train_script: Path) -> str:
         return ""
 
 def supports_flag(help_text: str, flag: str) -> bool:
-    # safer than naive splitting to avoid substrings
     pat = rf"(?:^|\s){re.escape(flag)}(?:[=\s]|$)"
     return re.search(pat, help_text) is not None
 
@@ -208,7 +196,6 @@ def evaluate_checkpoint(model_dir_or_id: str, dataset_dir: Path, limit: int,
         else:
             W, H = img.size
 
-        # Minimal prompt; no constrained decode at eval-time → fair apples-to-apples greedy
         messages = [{
             "role": "user",
             "content": [
@@ -242,7 +229,6 @@ def evaluate_checkpoint(model_dir_or_id: str, dataset_dir: Path, limit: int,
     invalid_pct = 100.0 * invalid / max(1, n_items)
     l2_mean = l2_sum / max(1, valid_count)
 
-    # Cleanup GPU memory
     del model
     del proc
     try:
@@ -266,15 +252,9 @@ def evaluate_checkpoint(model_dir_or_id: str, dataset_dir: Path, limit: int,
 # --------------------------- Disk cleanup --------------------------- #
 
 def cleanup_run_artifacts(run_dir: Path, keep_best_dir: bool = True, remove_tb: bool = True) -> None:
-    """
-    Save disk: remove per-epoch ckpts, optimizers, training_state.json, and optionally TB logs.
-    Keep rl_ckpt_best/ by default (we evaluate it and then delete unless global best).
-    """
     try:
-        # remove epoch ckpts
         for p in run_dir.glob("rl_ckpt_epoch*"):
             shutil.rmtree(p, ignore_errors=True)
-        # optimizer/training state
         for p in run_dir.rglob("optimizer.pt"):
             try: p.unlink()
             except Exception: pass
@@ -318,7 +298,6 @@ def ci95(values: List[float]) -> Tuple[float, float]:
 
 # --------------------------- Experiment Plan --------------------------- #
 
-# Baseline knobs (mirror your provided run)
 FULL_BASE = {
     "--epochs": 20,
     "--steps_per_epoch": 200,
@@ -329,11 +308,8 @@ FULL_BASE = {
     "--max_visual_tokens": 896,
     "--temperature": 0.7,
     "--top_p": 0.9,
-    # eval/save policy: eval once per epoch, avoid per-epoch saving; keep only rl_ckpt_best
-    # NB: we set eval_every_steps to steps_per_epoch at runtime
-    "--eval_subset_limit": 200,         # small, for in-training save_best; final eval uses --final_eval_limit
-    "--save_every_epochs": 1000000000,  # effectively disabled without hitting modulo-by-zero
-    # RL knobs (your baseline uses kl_coef=0.02)
+    "--eval_subset_limit": 200,         # in-training eval (fast)
+    "--save_every_epochs": 1000000000,  # disable per-epoch save safely
     "--entropy_coef": 0.01,
     "--kl_coef": 0.02,
     "--target_kl": 0.08,
@@ -342,32 +318,22 @@ FULL_BASE = {
     "--min_kl_coef": 1e-4,
     "--max_kl_coef": 5e-1,
     "--warmup_steps": 200,
-    # Safety
     "--safety_cooldown_steps": 20,
     "--safety_entropy_threshold": 3.0,
     "--safety_kl_multiplier": 5.0,
     "--safety_temp_floor": 0.3,
     "--safety_temp_decay": 0.5,
+    "--save_best": True,
 }
 
-# Per-variant overrides (scalars) and boolean flags to add
 VARIANTS: Dict[str, Tuple[Dict[str, object], Dict[str, bool], Dict[str, bool]]] = {
-    # name: (overrides, flags_true, flags_false)
-    # FULL: sampling + constrained decode (FSM)
     "full": ({}, {"--do_sample": True, "--constrained_decode": True}, {}),
-    # Greedy: NO sampling; keep FSM on for apples-to-apples grammar
     "greedy_only": ({}, {"--constrained_decode": True}, {"--do_sample": True}),
-    # Remove constrained decoding (FSM)
     "no_constrained": ({}, {}, {"--constrained_decode": True}),
-    # Remove KL (no reference model regularisation)
     "no_kl": ({"--kl_coef": 0.0}, {"--constrained_decode": True}, {"--do_sample": False}),
-    # Lower entropy (stiffer outputs)
     "low_entropy": ({"--entropy_coef": 0.003}, {"--do_sample": True, "--constrained_decode": True}, {}),
-    # No warm-up
     "no_warmup": ({"--warmup_steps": 0}, {"--do_sample": True, "--constrained_decode": True}, {}),
-    # No safety cooldown
     "no_safety": ({"--safety_cooldown_steps": 0}, {"--do_sample": True, "--constrained_decode": True}, {}),
-    # Larger visual tokens (more pixels)
     "large_visual_tokens": ({"--min_visual_tokens": 384, "--max_visual_tokens": 1024},
                             {"--do_sample": True, "--constrained_decode": True}, {}),
 }
@@ -397,6 +363,7 @@ def build_cmd(help_text: str, train_script: Path, dataset_dir: Path, outdir: Pat
            "--log_dir", str(outdir / "tb"),
            "--eval_envs", "desktop",
            "--stats_jsonl", str(outdir / "stats.jsonl"),
+           "--save_best", "True",
     ]
 
     def maybe_add_flag(k: str, v: object):
@@ -408,32 +375,51 @@ def build_cmd(help_text: str, train_script: Path, dataset_dir: Path, outdir: Pat
             else:
                 cmd += [k, str(v)]
 
-    # compose base + overrides
     for k, v in base.items():
         maybe_add_flag(k, v)
-    # ensure eval once per epoch to enable save_best
+    # ensure save_best happens once per epoch
     maybe_add_flag("--eval_every_steps", steps_per_epoch)
-
-    # decoding defaults (guarded)
     maybe_add_flag("--num_beams", 1)
 
-    # add booleans True (if supported)
     for k, v in flags_true.items():
         maybe_add_flag(k, v)
-    # DO NOT add any flag present in flags_false
-    # (we just avoid adding it — most bools default to False)
-
-    # apply numeric overrides last
     for k, v in overrides.items():
         maybe_add_flag(k, v)
 
-    # ensure batch size present (last wins)
     maybe_add_flag("--batch_size", base.get("--batch_size", 1))
 
-    # seed if supported
     if supports_flag(help_text, "--seed"):
         cmd += ["--seed", str(seed)]
     return cmd
+
+def print_plan(args, help_text: str):
+    seeds = args.seeds
+    variants = list(VARIANTS.keys())
+    runs = len(variants) * len(seeds)
+    baselines = 1 + (1 if args.user_baseline_dir else 0)
+
+    print("\n===== ABLATION PLAN =====")
+    print(f"Dataset dir       : {args.dataset_dir}")
+    print(f"Train dataset/json: {args.train_dataset} / {args.train_json}")
+    print(f"Epochs x Steps    : {args.epochs} x {args.steps_per_epoch}")
+    print(f"In-train eval N   : {FULL_BASE['--eval_subset_limit']}")
+    print(f"Final eval N      : {args.final_eval_limit}")
+    print(f"Seeds             : {seeds}")
+    print(f"Variants ({len(variants)}): {variants}")
+    print(f"Total runs        : {runs} (variants × seeds)")
+    print(f"Baselines         : {baselines} (zero-shot + {'user' if args.user_baseline_dir else 'no user'})")
+    print("Disk policy       : delete per-epoch ckpts & TB; "
+          + ("keep ONE global best ckpt" if args.keep_global_best_ckpt else "delete all ckpts after eval"))
+    print("\n-- Variant specs --")
+    for name, (ov, ft, ff) in VARIANTS.items():
+        def fmt(d): 
+            if not d: return "{}"
+            return "{ " + ", ".join(f"{k}={v}" for k,v in d.items()) + " }"
+        def fmtb(d): 
+            if not d: return "{}"
+            return "{ " + ", ".join(k for k in d.keys()) + " }"
+        print(f" * {name}: overrides={fmt(ov)} | flags_true={fmtb(ft)} | flags_false={fmtb(ff)}")
+    print("=========================\n")
 
 def main():
     ap = argparse.ArgumentParser()
@@ -444,23 +430,20 @@ def main():
     ap.add_argument("--train_json", type=str, default="hf_train")
     ap.add_argument("--epochs", type=int, default=FULL_BASE["--epochs"])
     ap.add_argument("--steps_per_epoch", type=int, default=FULL_BASE["--steps_per_epoch"])
-    ap.add_argument("--final_eval_limit", type=int, default=334, help="Items for final greedy eval per run (slow, but authoritative).")
-    ap.add_argument("--intrain_eval_limit", type=int, default=FULL_BASE["--eval_subset_limit"],
-                    help="Small subset used inside training for save_best; keep low to reduce slowdown.")
+    ap.add_argument("--final_eval_limit", type=int, default=334)
+    ap.add_argument("--intrain_eval_limit", type=int, default=FULL_BASE["--eval_subset_limit"])
     ap.add_argument("--seeds", type=int, nargs="+", default=[42, 2025])
-    ap.add_argument("--keep_global_best_ckpt", action="store_true", help="Retain only the single best ckpt across ALL runs; delete others.")
-    ap.add_argument("--user_baseline_dir", type=str, default="", help="Optional: path to a pre-trained rl_ckpt_best to include as 'user_baseline'.")
+    ap.add_argument("--keep_global_best_ckpt", action="store_true")
+    ap.add_argument("--user_baseline_dir", type=str, default="")
+    ap.add_argument("--list_only", action="store_true", help="Print variants/plan and exit.")
     args = ap.parse_args()
 
-    # Sync base with CLI overrides
     FULL_BASE["--epochs"] = args.epochs
     FULL_BASE["--steps_per_epoch"] = args.steps_per_epoch
-    FULL_BASE["--eval_subset_limit"] = max(10, int(args.intrain_eval_limit))  # small in-training eval to save time
+    FULL_BASE["--eval_subset_limit"] = max(10, int(args.intrain_eval_limit))
 
-    # Discover supported flags once
     help_text = _get_help_flags(args.train_script)
 
-    # IO setup
     args.base_outdir.mkdir(parents=True, exist_ok=True)
     per_run_csv = args.base_outdir / "per_run_results.csv"
     summary_csv = args.base_outdir / "summary.csv"
@@ -468,7 +451,7 @@ def main():
     tex_path = args.base_outdir / "ablation_table.tex"
     plan_path = args.base_outdir / "plan.json"
 
-    # Save plan
+    # Save & show plan
     json.dump({
         "full_base": FULL_BASE,
         "variants": list(VARIANTS.keys()),
@@ -476,8 +459,12 @@ def main():
         "final_eval_limit": args.final_eval_limit,
         "intrain_eval_limit": args.intrain_eval_limit,
     }, open(plan_path, "w"), indent=2)
+    print_plan(args, help_text)
+    if args.list_only:
+        print("[INFO] --list_only given; exiting without running.")
+        return
 
-    # Load existing results to resume
+    # Load existing rows (resume)
     existing: Dict[Tuple[str,int], dict] = {}
     if per_run_csv.exists():
         try:
@@ -498,82 +485,90 @@ def main():
     per_run_rows: List[dict] = []
     global_best: Tuple[float, Optional[Path]] = (-1.0, None)  # (succ_pct, path)
 
-    # Baselines first (zero-shot + optional user one)
-    baselines_done = set()
-    # Zero-shot ShowUI-2B
+    # Compute overall steps for progress bar
+    variants = list(VARIANTS.keys())
+    total_runs = len(variants) * len(args.seeds)
+    baseline_steps = 1 + (1 if args.user_baseline_dir else 0)   # each is one eval
+    steps_per_run = 3  # train -> eval -> cleanup
+    write_steps = 3    # per_run_csv + summary csv/json + latex
+    total_steps = baseline_steps + total_runs * steps_per_run + write_steps
+
+    overall = tqdm(total=total_steps, desc="Overall", unit="step")
+    runs_bar = tqdm(total=total_runs, desc="Ablation runs", unit="run")
+
+    # --- Baselines ---
+    print("[STEP] Baseline: zero-shot ShowUI-2B")
     try:
         bstats = evaluate_checkpoint("showlab/ShowUI-2B", args.dataset_dir, args.final_eval_limit,
                                      int(FULL_BASE["--min_visual_tokens"]), int(FULL_BASE["--max_visual_tokens"]),
                                      env_filter="desktop")
         row = {"variant": "baseline_zero_shot", "seed": 0, "train_time_sec": 0.0, **bstats}
         per_run_rows.append(row)
-        print(f"[BASELINE] Zero-shot ShowUI-2B: succ={row['succ_pct']:.2f}% l2={row['l2_mean']:.4f} invalid={row['invalid_pct']:.2f}%")
-        baselines_done.add("baseline_zero_shot")
+        print(f"[BASELINE] Zero-shot: succ={row['succ_pct']:.2f}% l2={row['l2_mean']:.4f} invalid={row['invalid_pct']:.2f}%")
     except Exception as e:
         print(f"[WARN] Zero-shot baseline failed: {e}")
+    overall.update(1)
 
     if args.user_baseline_dir:
+        print(f"[STEP] Baseline: user model @ {args.user_baseline_dir}")
         try:
             bstats = evaluate_checkpoint(args.user_baseline_dir, args.dataset_dir, args.final_eval_limit,
                                          int(FULL_BASE["--min_visual_tokens"]), int(FULL_BASE["--max_visual_tokens"]),
                                          env_filter="desktop")
             row = {"variant": "user_baseline", "seed": 0, "train_time_sec": 0.0, **bstats}
             per_run_rows.append(row)
-            print(f"[BASELINE] User baseline @ {args.user_baseline_dir}: succ={row['succ_pct']:.2f}%")
-            baselines_done.add("user_baseline")
+            print(f"[BASELINE] User baseline: succ={row['succ_pct']:.2f}%")
         except Exception as e:
             print(f"[WARN] User baseline eval failed: {e}")
+        overall.update(1)
 
-    # Variants x seeds
-    for vname, (overrides, flags_true, flags_false) in VARIANTS.items():
-        vdir = args.base_outdir / vname
-        vdir.mkdir(parents=True, exist_ok=True)
-        per_seed_metrics = {"succ": [], "invalid": [], "l2": []}
-
+    # --- Variants × Seeds ---
+    for vname in variants:
         for seed in args.seeds:
-            key = (vname, seed)
-            rundir = vdir / f"seed{seed}"
+            rundir = args.base_outdir / vname / f"seed{seed}"
             rundir.mkdir(parents=True, exist_ok=True)
 
-            # If already evaluated (resume)
             eval_json = rundir / "eval.json"
             if eval_json.exists():
                 try:
                     row = json.load(open(eval_json))
                     per_run_rows.append(row)
-                    per_seed_metrics["succ"].append(row["succ_pct"])
-                    per_seed_metrics["invalid"].append(row["invalid_pct"])
-                    per_seed_metrics["l2"].append(row["l2_mean"])
-                    print(f"[SKIP] {vname} seed {seed} already evaluated: succ={row['succ_pct']:.2f}%")
+                    print(f"[SKIP] {vname}/seed{seed} already evaluated: succ={row['succ_pct']:.2f}%")
+                    runs_bar.update(1)
+                    overall.update(steps_per_run)  # count train+eval+cleanup as done
                     continue
                 except Exception as e:
                     print(f"[WARN] Failed to load {eval_json}: {e}. Re-running...")
 
-            # Build training command (ensure eval once per epoch → save_best)
+            # TRAIN
+            print(f"[STEP] Train: variant={vname}, seed={seed}")
+            overrides, flags_true, flags_false = VARIANTS[vname]
             cmd = build_cmd(help_text, args.train_script, args.dataset_dir, rundir, seed,
                             FULL_BASE, flags_true, flags_false, overrides,
                             args.train_dataset, args.train_json, args.steps_per_epoch)
-
-            # Train
             t0 = time.time()
             rc = run(cmd, cwd=rundir)
             t_train = time.time() - t0
-
-            # Give GPU a moment to free
+            print(f"[DONE] Train in {t_train:.1f}s (rc={rc})")
+            overall.update(1)
             print("[GPU] Sleeping 5s for cleanup...")
             time.sleep(5)
 
             if rc != 0:
-                print(f"[ERROR] Training failed for {vname} seed {seed} (rc={rc}). Skipping eval.")
+                print(f"[ERROR] Training failed for {vname} seed {seed} (rc={rc}). Skipping eval/cleanup.")
+                runs_bar.update(1)
+                overall.update(2)  # still tick eval+cleanup to keep overall bar moving
                 continue
 
-            # Find and evaluate best checkpoint (deterministic greedy, larger limit)
+            # EVAL
             ckpt = find_ckpt(rundir)
             if not ckpt:
-                print(f"[ERROR] No checkpoint found in {rundir}. Skipping.")
+                print(f"[ERROR] No checkpoint found in {rundir}. Skipping eval/cleanup.")
+                runs_bar.update(1)
+                overall.update(2)
                 continue
 
-            print(f"[EVAL] {vname} seed {seed} @ {ckpt}")
+            print(f"[STEP] Eval: {vname}/seed{seed} @ {ckpt}")
             estats = evaluate_checkpoint(
                 model_dir_or_id=str(ckpt),
                 dataset_dir=args.dataset_dir,
@@ -582,7 +577,6 @@ def main():
                 max_visual_tokens=int(FULL_BASE["--max_visual_tokens"]),
                 env_filter="desktop",
             )
-
             row = {
                 "variant": vname,
                 "seed": seed,
@@ -591,12 +585,16 @@ def main():
             }
             per_run_rows.append(row)
             json.dump(row, open(eval_json, "w"), indent=2)
-            print(f"[RESULT] {vname} seed {seed}: succ={row['succ_pct']:.2f}% l2={row['l2_mean']:.4f} invalid={row['invalid_pct']:.2f}%")
+            print(f"[RESULT] {vname}/seed{seed}: succ={row['succ_pct']:.2f}% l2={row['l2_mean']:.4f} invalid={row['invalid_pct']:.2f}%")
+            overall.update(1)
 
-            # Track global best to optionally keep one ckpt only
+            # CLEANUP
             if args.keep_global_best_ckpt:
-                if row["succ_pct"] > global_best[0]:
-                    # delete previous kept best
+                # keep only the best overall
+                # compare on succ_pct; delete non-best ckpts
+                # NOTE: we can’t compare across different limits here, but all runs share same limit
+                if row["succ_pct"] > (global_best[0] if global_best[0] is not None else -1):
+                    # delete previous best if any
                     if global_best[1] is not None and global_best[1].exists():
                         try:
                             print(f"[CLEAN] Deleting previous global best: {global_best[1]}")
@@ -606,7 +604,6 @@ def main():
                     global_best = (row["succ_pct"], ckpt)
                     print(f"[BEST] New global best {row['succ_pct']:.2f}% @ {ckpt}")
                 else:
-                    # delete this run's best ckpt to save disk
                     try:
                         sz = human_size(dir_size_bytes(ckpt))
                         print(f"[CLEAN] Removing ckpt ({sz}) {ckpt}")
@@ -614,7 +611,6 @@ def main():
                     except Exception:
                         pass
             else:
-                # Always delete ckpt to minimize disk usage
                 try:
                     sz = human_size(dir_size_bytes(ckpt))
                     print(f"[CLEAN] Removing ckpt ({sz}) {ckpt}")
@@ -622,37 +618,26 @@ def main():
                 except Exception:
                     pass
 
-            # Agg metrics
-            per_seed_metrics["succ"].append(row["succ_pct"])
-            per_seed_metrics["invalid"].append(row["invalid_pct"])
-            per_seed_metrics["l2"].append(row["l2_mean"])
-
-            # Remove training junk
             cleanup_run_artifacts(rundir, keep_best_dir=False, remove_tb=True)
+            overall.update(1)
+            runs_bar.update(1)
 
-        # (Optional) per-variant printout
-        if per_seed_metrics["succ"]:
-            m_succ, ci_succ = ci95(per_seed_metrics["succ"])
-            m_inv, ci_inv = ci95(per_seed_metrics["invalid"])
-            m_l2, ci_l2 = ci95(per_seed_metrics["l2"])
-            print(f"[SUMMARY] {vname}: succ={m_succ:.2f}±{ci_succ:.2f}% | l2={m_l2:.4f}±{ci_l2:.4f} | invalid={m_inv:.2f}±{ci_inv:.2f}% over {len(per_seed_metrics['succ'])} seeds")
-
-    # Merge with existing rows and write per-run CSV
+    # --- Write outputs ---
+    # merge with existing, de-dup
     all_rows = list(per_run_rows)
-    # also keep previous non-duplicate entries
     seen = set((r["variant"], r["seed"]) for r in all_rows)
     for (v, s), r in existing.items():
         if (v, s) not in seen:
             all_rows.append(r)
-
     if all_rows:
         all_rows = sorted(all_rows, key=lambda x: (x["variant"], x["seed"]))
         with open(per_run_csv, "w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=list(all_rows[0].keys()))
             w.writeheader(); w.writerows(all_rows)
         print(f"[WRITE] {per_run_csv} ({len(all_rows)} runs total)")
+    overall.update(1)
 
-    # Build per-variant summary across seeds (exclude baselines from CI table)
+    # summaries
     by_variant: Dict[str, Dict[str, List[float]]] = {}
     for r in all_rows:
         v = r["variant"]
@@ -682,14 +667,15 @@ def main():
             })
 
     if summary_rows:
-        # CSV/JSON
         with open(summary_csv, "w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=list(summary_rows[0].keys()))
             w.writeheader(); w.writerows(summary_rows)
         json.dump(summary_rows, open(summary_json, "w"), indent=2)
         print(f"[WRITE] {summary_csv}\n[WRITE] {summary_json}")
+    overall.update(1)
 
-        # LaTeX
+    # LaTeX
+    if summary_rows:
         def sort_key(r):
             order = list(PRETTY.keys())
             try:
@@ -728,14 +714,16 @@ def main():
         ]
         open(tex_path, "w").write("\n".join(lines))
         print(f"[WRITE] {tex_path}")
+    overall.update(1)
 
-    # Final note on the kept ckpt
-    if hasattr(args, "keep_global_best_ckpt") and args.keep_global_best_ckpt:
+    # Keep-best report
+    if args.keep_global_best_ckpt:
         if global_best[1] is not None:
             sz = human_size(dir_size_bytes(global_best[1]))
             print(f"[KEEP] Global best kept: {global_best[1]} ({sz}), succ={global_best[0]:.2f}%")
         else:
-            print("[KEEP] No ckpt kept (no runs succeeded?)")
+            print("[KEEP] No ckpt kept.")
+    overall.close(); runs_bar.close()
 
 if __name__ == "__main__":
     main()
