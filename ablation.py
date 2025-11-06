@@ -496,29 +496,41 @@ def main():
     runs_bar = tqdm(total=total_runs, desc="Ablation runs", unit="run")
 
     # --- Baselines ---
-    print("[STEP] Baseline: zero-shot ShowUI-2B")
-    try:
-        bstats = evaluate_checkpoint("showlab/ShowUI-2B", args.dataset_dir, args.final_eval_limit,
-                                     int(FULL_BASE["--min_visual_tokens"]), int(FULL_BASE["--max_visual_tokens"]),
-                                     env_filter="desktop")
-        row = {"variant": "baseline_zero_shot", "seed": 0, "train_time_sec": 0.0, **bstats}
+    # Check if zero-shot baseline already exists
+    if ("baseline_zero_shot", 0) in existing:
+        row = existing[("baseline_zero_shot", 0)]
         per_run_rows.append(row)
-        print(f"[BASELINE] Zero-shot: succ={row['succ_pct']:.2f}% l2={row['l2_mean']:.4f} invalid={row['invalid_pct']:.2f}%")
-    except Exception as e:
-        print(f"[WARN] Zero-shot baseline failed: {e}")
+        print(f"[SKIP] Zero-shot baseline already evaluated: succ={row['succ_pct']:.2f}% l2={row['l2_mean']:.4f} invalid={row['invalid_pct']:.2f}%")
+    else:
+        print("[STEP] Baseline: zero-shot ShowUI-2B")
+        try:
+            bstats = evaluate_checkpoint("showlab/ShowUI-2B", args.dataset_dir, args.final_eval_limit,
+                                         int(FULL_BASE["--min_visual_tokens"]), int(FULL_BASE["--max_visual_tokens"]),
+                                         env_filter="desktop")
+            row = {"variant": "baseline_zero_shot", "seed": 0, "train_time_sec": 0.0, **bstats}
+            per_run_rows.append(row)
+            print(f"[BASELINE] Zero-shot: succ={row['succ_pct']:.2f}% l2={row['l2_mean']:.4f} invalid={row['invalid_pct']:.2f}%")
+        except Exception as e:
+            print(f"[WARN] Zero-shot baseline failed: {e}")
     overall.update(1)
 
     if args.user_baseline_dir:
-        print(f"[STEP] Baseline: user model @ {args.user_baseline_dir}")
-        try:
-            bstats = evaluate_checkpoint(args.user_baseline_dir, args.dataset_dir, args.final_eval_limit,
-                                         int(FULL_BASE["--min_visual_tokens"]), int(FULL_BASE["--max_visual_tokens"]),
-                                         env_filter="desktop")
-            row = {"variant": "user_baseline", "seed": 0, "train_time_sec": 0.0, **bstats}
+        # Check if user baseline already exists
+        if ("user_baseline", 0) in existing:
+            row = existing[("user_baseline", 0)]
             per_run_rows.append(row)
-            print(f"[BASELINE] User baseline: succ={row['succ_pct']:.2f}%")
-        except Exception as e:
-            print(f"[WARN] User baseline eval failed: {e}")
+            print(f"[SKIP] User baseline already evaluated: succ={row['succ_pct']:.2f}%")
+        else:
+            print(f"[STEP] Baseline: user model @ {args.user_baseline_dir}")
+            try:
+                bstats = evaluate_checkpoint(args.user_baseline_dir, args.dataset_dir, args.final_eval_limit,
+                                             int(FULL_BASE["--min_visual_tokens"]), int(FULL_BASE["--max_visual_tokens"]),
+                                             env_filter="desktop")
+                row = {"variant": "user_baseline", "seed": 0, "train_time_sec": 0.0, **bstats}
+                per_run_rows.append(row)
+                print(f"[BASELINE] User baseline: succ={row['succ_pct']:.2f}%")
+            except Exception as e:
+                print(f"[WARN] User baseline eval failed: {e}")
         overall.update(1)
 
     # --- Variants × Seeds ---
