@@ -1,23 +1,19 @@
 #!/usr/bin/env python3
 """
-Run a complete, **sequential** ablation study for your ShowUI RL fine‑tuning code, evaluate each run,
+Run a complete, sequential ablation study for your ShowUI RL fine‑tuning code, evaluate each run,
 aggregate across seeds, and save CSV/JSON/LaTeX + a compact Markdown report.
 
 Usage (example):
-    python run_ablation.py \
-      --train_script /path/to/train_rl.py \
-      --dataset_dir /data/ShowUI \
-      --base_outdir ./ablation_runs \
-      --epochs 2 --steps_per_epoch 1000 --eval_subset_limit 400 \
-      --seeds 42 1337 2025
+    python ablation.py \
+      --train_script /mnt/f/USYD/Research/ShowUI/rl_train_optimized.py \
+      --dataset_dir /mnt/f/USYD/Research/DATASETS/ShowUI \
+      --base_outdir /mnt/f/USYD/Research/ShowUI/ablation_runs \
+      --train_dataset showui-train --train_json hf_train \
+      --epochs 20 --steps_per_epoch 200 --eval_subset_limit 400 \
+      --seeds 42 2025
 
-This script assumes your training script:
-  * accepts the CLI flags shown in the call composed below (as in your provided file),
-  * writes checkpoints to the current working directory (we set per‑run cwd), and
-  * saves `rl_ckpt_best/` when `--save_best` is given.
-
-If a particular ablation flag isn't supported (e.g., `--reward_ema_beta` on older copies),
-that ablation will be **skipped** gracefully.
+This script detects which flags your training script supports (via --help) and only passes those flags.
+Unsupported variants (e.g., --reward_ema_beta) are skipped automatically.
 """
 
 from __future__ import annotations
@@ -260,49 +256,42 @@ def cleanup_run_artifacts(run_dir: Path, keep_best: bool = True, remove_tb: bool
 # --------------------------- Experiment Plan --------------------------- #
 
 FULL_BASE = {
-    # Data & schedule
-    "--epochs": 2,
-    "--steps_per_epoch": 1000,
+    # Data & schedule (optimized baseline)
+    "--epochs": 20,
+    "--steps_per_epoch": 200,
     "--batch_size": 1,
     "--lr": 5e-6,
-    "--max_new_tokens": 64,
+    "--max_new_tokens": 32,
     "--min_visual_tokens": 256,
     "--max_visual_tokens": 896,
-    "--eval_split": "hf_test_full",
     # Eval cadence
     "--eval_subset_limit": 400,
-    "--eval_every_steps": 10000,  # Effectively disable mid-epoch eval (only eval at epoch end)
-    # RL knobs
-    "--tau_success": 0.08,
-    "--tau_success_end": 0.06,
+    "--eval_every_steps": 10000,  # effectively eval at epoch end only
+    # RL knobs (rl_train_optimized.py style)
+    "--tau_success": 0.06,
     "--alpha_dist": 1.0,
-    "--entropy_coef_start": 0.01,
-    "--entropy_coef_end": 0.0,
-    "--kl_coef": 0.01,
-    "--ref_model_id": "showlab/ShowUI-2B",
-    "--target_kl": 0.10,
+    "--entropy_coef": 0.01,
+    "--kl_coef": 0.02,
+    "--target_kl": 0.08,
     "--kl_adapt_every": 50,
     "--kl_adapt_rate": 1.5,
-    "--min_kl_coef": 0.0,
-    "--max_kl_coef": 0.5,
+    "--min_kl_coef": 1e-4,
+    "--max_kl_coef": 5e-1,
     "--warmup_steps": 200,
-    "--max_grad_norm": 1.0,
-    "--adv_clip": 3.0,
     # Safety
-    "--safety_cooldown_steps": 50,
+    "--safety_cooldown_steps": 20,
     "--safety_entropy_threshold": 3.0,
     "--safety_kl_multiplier": 5.0,
     "--safety_temp_floor": 0.3,
     "--safety_temp_decay": 0.5,
-    # Storage control: disable periodic epoch saves; rely on best-only
+    # Storage control: rely on best-only
     "--save_every_epochs": 0,
 }
 
 FULL_FLAGS_TRUE = {
     "--save_best": True,
-    # Avoid saving optimizer to reduce disk usage
-    "--save_optimizer": False,
     "--do_sample": True,
+    "--constrained_decode": True,
 }
 
 # Variant definitions as overrides relative to FULL
@@ -310,11 +299,11 @@ VARIANTS = {
     "full": ({}, {}),
     "no_distance": ({"--alpha_dist": 0.0}, {}),
     # EMA baseline toggle (best-effort; only applied if train script supports --reward_ema_beta)
-    "no_ema": ({"--reward_ema_beta": 0.0, "--adv_clip": 1.0}, {}),
-    "no_entropy": ({"--entropy_coef_start": 0.0, "--entropy_coef_end": 0.0}, {}),
+    "no_ema": ({"--reward_ema_beta": 0.0}, {}),
+    "no_entropy": ({"--entropy_coef": 0.0}, {}),
     "no_warmup": ({"--warmup_steps": 0}, {}),
     "no_safety": ({"--safety_cooldown_steps": 0}, {}),
-    "fixed_tau": ({"--tau_success": 0.06, "--tau_success_end": 0.06}, {}),
+    "fixed_tau": ({"--tau_success": 0.06}, {}),
     "no_kl": ({"--kl_coef": 0.0}, {}),
     "greedy_only": ({}, {"--do_sample": False}),
 }
@@ -336,33 +325,42 @@ PRETTY = {
 
 def build_cmd(train_script: Path, dataset_dir: Path, outdir: Path, seed: int,
               base: Dict[str, object], flags_true: Dict[str, bool], overrides: Dict[str, object],
-              overrides_true: Dict[str, bool]) -> List[str]:
+              overrides_true: Dict[str, bool], train_dataset: str, train_json: str) -> List[str]:
     cmd = [sys.executable, str(train_script.resolve()),
            "--dataset_dir", str(dataset_dir.resolve()),
-           "--train_dataset", "showui-desktop", "--train_json", "hf_train",
+           "--train_dataset", str(train_dataset), "--train_json", str(train_json),
            "--model_id", "showlab/ShowUI-2B",
            "--log_dir", str(outdir / "tb"),
            "--eval_envs", "desktop",
            "--stats_jsonl", str(outdir / "stats.jsonl"),
           ]
-    # Compose flags
-    def append_kv(d: Dict[str, object]):
+
+    def maybe_add_flag(k: str, v: object):
         nonlocal cmd
-        for k, v in d.items():
+        if supports_flag(train_script, k):
             if isinstance(v, bool):
                 if v:
                     cmd.append(k)
             else:
                 cmd += [k, str(v)]
-    append_kv(base)
-    # fractional sampling params (benign if present while greedy)
-    cmd += ["--top_p", "0.9", "--temperature", "0.7", "--temperature_end", "0.5", "--num_beams", "1"]
-    append_kv(flags_true)
-    append_kv(overrides)
-    append_kv(overrides_true)
-    # Seed: the training script seeds via RLArgs(seed=...), we set env var for reproducibility of sampling order
-    cmd += ["--batch_size", str(base.get("--batch_size", 1))]  # ensure last wins
-    # Store seed in log path; the script itself fixes seed via RLArgs; if it supports --seed, add it.
+
+    # Compose flags with support checks
+    for k, v in base.items():
+        maybe_add_flag(k, v)
+    # Decoding defaults (guarded)
+    maybe_add_flag("--top_p", 0.9)
+    maybe_add_flag("--temperature", 0.7)
+    maybe_add_flag("--num_beams", 1)
+    for k, v in flags_true.items():
+        maybe_add_flag(k, v)
+    for k, v in overrides.items():
+        maybe_add_flag(k, v)
+    for k, v in overrides_true.items():
+        maybe_add_flag(k, v)
+
+    # Ensure batch size present (last wins)
+    maybe_add_flag("--batch_size", base.get("--batch_size", 1))
+    # Seed if supported
     if supports_flag(train_script, "--seed"):
         cmd += ["--seed", str(seed)]
     return cmd
@@ -402,6 +400,8 @@ def main():
     ap.add_argument("--train_script", type=Path, required=True, help="Path to your train_rl.py")
     ap.add_argument("--dataset_dir", type=Path, required=True)
     ap.add_argument("--base_outdir", type=Path, default=Path("./ablation_runs"))
+    ap.add_argument("--train_dataset", type=str, default="showui-train")
+    ap.add_argument("--train_json", type=str, default="hf_train")
     ap.add_argument("--epochs", type=int, default=FULL_BASE["--epochs"])  # allow override
     ap.add_argument("--steps_per_epoch", type=int, default=FULL_BASE["--steps_per_epoch"])  # allow override
     ap.add_argument("--eval_subset_limit", type=int, default=FULL_BASE["--eval_subset_limit"])  # allow override
@@ -482,7 +482,8 @@ def main():
 
             # Compose command
             cmd = build_cmd(args.train_script, args.dataset_dir, run_dir, seed,
-                            FULL_BASE, FULL_FLAGS_TRUE, over, over_true)
+                            FULL_BASE, FULL_FLAGS_TRUE, over, over_true,
+                            args.train_dataset, args.train_json)
 
             # Train (sequential)
             t0 = time.time()
@@ -539,8 +540,8 @@ def main():
             per_seed_metrics["invalid"].append(row["invalid_pct"])  # % values
             per_seed_metrics["l2"].append(row["l2_mean"])  # absolute
 
-            # Storage cleanup: remove intermediate checkpoints and optimizer files
-            cleanup_run_artifacts(run_dir, keep_best=True, remove_tb=False)
+            # Storage cleanup: remove intermediate checkpoints, optimizer files, and TB logs
+            cleanup_run_artifacts(run_dir, keep_best=True, remove_tb=True)
 
         # Aggregate over seeds
         if per_seed_metrics["succ"]:
