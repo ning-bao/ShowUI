@@ -48,10 +48,15 @@ def run(cmd: List[str], cwd: Path) -> int:
 
 
 def supports_flag(train_script: Path, flag: str) -> bool:
+    """Check if train_script supports a specific flag by parsing --help output.
+    Uses exact matching to avoid false positives from partial matches."""
     try:
         out = subprocess.run([sys.executable, str(train_script), "--help"],
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
-        return flag in out.stdout
+        # Look for exact flag match (not substring)
+        # Match patterns like: "--flag", "--flag ", "--flag,", "--flag\n"
+        pattern = rf"(?:^|\s){re.escape(flag)}(?:\s|,|$)"
+        return bool(re.search(pattern, out.stdout, re.MULTILINE))
     except Exception:
         return False
 
