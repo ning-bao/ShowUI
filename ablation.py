@@ -3,17 +3,20 @@
 Run a complete, sequential ablation study for your ShowUI RL fine‑tuning code, evaluate each run,
 aggregate across seeds, and save CSV/JSON/LaTeX + a compact Markdown report.
 
+Compatible with both rl_train.py and rl_train_optimized.py - automatically detects and adapts
+to the parameter style of your training script (e.g., --entropy_coef vs --entropy_coef_start/end).
+
 Usage (example):
     python ablation.py \
-      --train_script /mnt/f/USYD/Research/ShowUI/rl_train_optimized.py \
-      --dataset_dir /mnt/f/USYD/Research/DATASETS/ShowUI \
-      --base_outdir /mnt/f/USYD/Research/ShowUI/ablation_runs \
-      --train_dataset showui-train --train_json hf_train \
+      --train_script ~/ShowUI/rl_train.py \
+      --dataset_dir "$DATA_DIR" \
+      --base_outdir ~/ShowUI/ablation_runs \
+      --train_dataset ShowUI-desktop --train_json hf_train \
       --epochs 2 --steps_per_epoch 1000 --eval_subset_limit 400 \
       --seeds 42 2025
 
 This script detects which flags your training script supports (via --help) and only passes those flags.
-Unsupported variants (e.g., --reward_ema_beta) are skipped automatically.
+Unsupported variants (e.g., --reward_ema_beta for rl_train_optimized.py) are skipped automatically.
 """
 
 from __future__ import annotations
@@ -268,12 +271,15 @@ FULL_BASE = {
     # Eval cadence
     "--eval_subset_limit": 400,
     "--eval_every_steps": 10000,  # effectively eval at epoch end only
-    # RL knobs (rl_train_optimized.py style)
+    # RL knobs (compatible with both rl_train.py and rl_train_optimized.py)
     # Fixed tau (both start and end at same value)
     "--tau_success": 0.06,
     "--tau_success_end": 0.06,
     "--alpha_dist": 1.0,
-    "--entropy_coef": 0.01,
+    # Entropy (both styles - script will use whichever is supported)
+    "--entropy_coef": 0.01,           # for rl_train_optimized.py
+    "--entropy_coef_start": 0.01,     # for rl_train.py
+    "--entropy_coef_end": 0.01,       # for rl_train.py (fixed, same as start)
     "--kl_coef": 0.02,
     "--target_kl": 0.08,
     "--kl_adapt_every": 50,
@@ -281,6 +287,7 @@ FULL_BASE = {
     "--min_kl_coef": 1e-4,
     "--max_kl_coef": 5e-1,
     "--warmup_steps": 200,
+    "--reward_ema_beta": 0.9,         # for rl_train.py (will be filtered if unsupported)
     # Safety
     "--safety_cooldown_steps": 20,
     "--safety_entropy_threshold": 3.0,
@@ -303,7 +310,8 @@ VARIANTS = {
     "no_distance": ({"--alpha_dist": 0.0}, {}),
     # EMA baseline toggle (best-effort; only applied if train script supports --reward_ema_beta)
     "no_ema": ({"--reward_ema_beta": 0.0}, {}),
-    "no_entropy": ({"--entropy_coef": 0.0}, {}),
+    # No entropy (supports both parameter styles)
+    "no_entropy": ({"--entropy_coef": 0.0, "--entropy_coef_start": 0.0, "--entropy_coef_end": 0.0}, {}),
     "no_warmup": ({"--warmup_steps": 0}, {}),
     "no_safety": ({"--safety_cooldown_steps": 0}, {}),
     "adaptive_tau": ({"--tau_success": 0.06, "--tau_success_end": 0.02}, {}),
@@ -418,10 +426,26 @@ def main():
     FULL_BASE["--steps_per_epoch"] = args.steps_per_epoch
     FULL_BASE["--eval_subset_limit"] = args.eval_subset_limit
 
-    # Detect unsupported flags and adjust the variants list accordingly
+    # Detect training script capabilities
+    print(f"\n[INFO] Detecting capabilities of training script: {args.train_script.name}")
     has_reward_ema_beta = supports_flag(args.train_script, "--reward_ema_beta")
+    has_entropy_coef = supports_flag(args.train_script, "--entropy_coef")
+    has_entropy_coef_start = supports_flag(args.train_script, "--entropy_coef_start")
+    
+    print(f"[INFO] Training script parameters detected:")
+    print(f"  - --reward_ema_beta: {'✓' if has_reward_ema_beta else '✗'}")
+    print(f"  - --entropy_coef (fixed): {'✓' if has_entropy_coef else '✗'}")
+    print(f"  - --entropy_coef_start/end (scheduled): {'✓' if has_entropy_coef_start else '✗'}")
+    
+    if has_entropy_coef and has_entropy_coef_start:
+        print(f"[INFO] Script supports both entropy styles - will use scheduled version")
+    elif has_entropy_coef:
+        print(f"[INFO] Using fixed entropy coefficient (rl_train_optimized.py style)")
+    elif has_entropy_coef_start:
+        print(f"[INFO] Using scheduled entropy coefficient (rl_train.py style)")
+    
     if not has_reward_ema_beta and "no_ema" in VARIANTS:
-        print("[WARN] --reward_ema_beta not supported by the training script; skipping 'no_ema' ablation.")
+        print("[WARN] --reward_ema_beta not supported; skipping 'no_ema' ablation.")
 
     # Load existing results if they exist (for resuming/appending)
     per_run_csv = args.base_outdir / "per_run_results.csv"
