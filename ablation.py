@@ -9,7 +9,7 @@ Usage (example):
       --dataset_dir /mnt/f/USYD/Research/DATASETS/ShowUI \
       --base_outdir /mnt/f/USYD/Research/ShowUI/ablation_runs \
       --train_dataset showui-train --train_json hf_train \
-      --epochs 20 --steps_per_epoch 200 --eval_subset_limit 400 \
+      --epochs 2 --steps_per_epoch 1000 --eval_subset_limit 400 \
       --seeds 42 2025
 
 This script detects which flags your training script supports (via --help) and only passes those flags.
@@ -33,6 +33,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
+from tqdm import tqdm
 
 # --------------------------- Utilities --------------------------- #
 
@@ -160,7 +161,7 @@ def evaluate_checkpoint(model_dir: Path, dataset_dir: Path, limit: int,
         x, y, bw, bh = bbox
         return (x + bw/2)/w, (y + bh/2)/h
 
-    for it in items:
+    for it in tqdm(items, desc="Evaluating samples", leave=False):
         img_path = dataset_dir / "ScreenSpot" / "images" / it["img_url"]
         if not img_path.exists():
             continue
@@ -268,7 +269,9 @@ FULL_BASE = {
     "--eval_subset_limit": 400,
     "--eval_every_steps": 10000,  # effectively eval at epoch end only
     # RL knobs (rl_train_optimized.py style)
+    # Fixed tau (both start and end at same value)
     "--tau_success": 0.06,
+    "--tau_success_end": 0.06,
     "--alpha_dist": 1.0,
     "--entropy_coef": 0.01,
     "--kl_coef": 0.02,
@@ -303,7 +306,8 @@ VARIANTS = {
     "no_entropy": ({"--entropy_coef": 0.0}, {}),
     "no_warmup": ({"--warmup_steps": 0}, {}),
     "no_safety": ({"--safety_cooldown_steps": 0}, {}),
-    "fixed_tau": ({"--tau_success": 0.06}, {}),
+    "adaptive_tau": ({"--tau_success": 0.06, "--tau_success_end": 0.02}, {}),
+    "no_tau": ({"--tau_success": 0.0, "--tau_success_end": 0.0}, {}),
     "no_kl": ({"--kl_coef": 0.0}, {}),
     "greedy_only": ({}, {"--do_sample": False}),
 }
@@ -316,7 +320,8 @@ PRETTY = {
     "no_entropy": "\\hspace{1em}-- entropy",
     "no_warmup": "\\hspace{1em}-- warm-up",
     "no_safety": "\\hspace{1em}-- safety cd.",
-    "fixed_tau": "\\hspace{1em} fixed \\tau",
+    "adaptive_tau": "\\hspace{1em}-- fixed \\tau (adaptive instead)",
+    "no_tau": "\\hspace{1em}-- \\tau (set to 0)",
     "no_kl": "\\hspace{1em}-- adaptive KL",
     "greedy_only": "\\hspace{1em} greedy only",
 }
@@ -453,14 +458,20 @@ def main():
         "seeds": args.seeds,
     }, open(plan_path, "w"), indent=2)
 
-    for vname, (over, over_true) in VARIANTS.items():
-        if vname == "no_ema" and not has_reward_ema_beta:
-            continue
+    # Filter out unsupported variants
+    variants_to_run = [(vname, over, over_true) for vname, (over, over_true) in VARIANTS.items()
+                       if not (vname == "no_ema" and not has_reward_ema_beta)]
+    
+    print(f"\n{'='*80}")
+    print(f"Running {len(variants_to_run)} variants × {len(args.seeds)} seeds = {len(variants_to_run) * len(args.seeds)} total runs")
+    print(f"{'='*80}\n")
+    
+    for vname, over, over_true in tqdm(variants_to_run, desc="Ablation Variants", position=0, leave=True):
         vdir = args.base_outdir / vname
         vdir.mkdir(parents=True, exist_ok=True)
         per_seed_metrics = {"succ": [], "invalid": [], "l2": []}
 
-        for seed in args.seeds:
+        for seed in tqdm(args.seeds, desc=f"  {vname} seeds", position=1, leave=False):
             run_dir = vdir / f"seed{seed}"
             run_dir.mkdir(parents=True, exist_ok=True)
             
@@ -486,26 +497,28 @@ def main():
                             args.train_dataset, args.train_json)
 
             # Train (sequential)
+            tqdm.write(f"\n[TRAIN] Starting {vname} seed {seed}...")
             t0 = time.time()
             rc = run(cmd, cwd=run_dir)
             t_train = time.time() - t0
+            tqdm.write(f"[TRAIN] Completed in {t_train/60:.1f} minutes")
             
             # Wait for GPU memory to be fully released by the subprocess
-            print("[GPU] Waiting 5 seconds for GPU memory cleanup...")
+            tqdm.write("[GPU] Waiting 5 seconds for GPU memory cleanup...")
             time.sleep(5)
             
             if rc != 0:
-                print(f"[ERROR] Training failed for {vname} seed {seed} (rc={rc}). Skipping eval.")
+                tqdm.write(f"[ERROR] Training failed for {vname} seed {seed} (rc={rc}). Skipping eval.")
                 continue
 
             # Find checkpoint
             ckpt = find_ckpt(run_dir)
             if not ckpt:
-                print(f"[ERROR] No checkpoint found in {run_dir}.")
+                tqdm.write(f"[ERROR] No checkpoint found in {run_dir}.")
                 continue
 
             # Evaluate
-            print(f"[EVAL] {vname} seed {seed} @ {ckpt}")
+            tqdm.write(f"[EVAL] Evaluating {vname} seed {seed} @ {ckpt.name}")
             eval_stats = evaluate_checkpoint(
                 model_dir=ckpt,
                 dataset_dir=args.dataset_dir,
@@ -516,7 +529,7 @@ def main():
             )
             
             # Wait after evaluation for GPU cleanup
-            print("[GPU] Waiting 3 seconds after evaluation...")
+            tqdm.write("[GPU] Waiting 3 seconds after evaluation...")
             time.sleep(3)
 
             row = {
@@ -533,7 +546,7 @@ def main():
             }
             results_rows.append(row)
             json.dump(row, open(run_dir / "eval.json", "w"), indent=2)
-            print(f"[RESULT] {vname} seed {seed}: succ={row['succ_pct']:.2f}%, l2={row['l2_mean']:.4f}, invalid={row['invalid_pct']:.2f}%")
+            tqdm.write(f"[RESULT] {vname} seed {seed}: succ={row['succ_pct']:.2f}%, l2={row['l2_mean']:.4f}, invalid={row['invalid_pct']:.2f}%")
 
             # For summary
             per_seed_metrics["succ"].append(row["succ_pct"])  # % values
@@ -541,6 +554,7 @@ def main():
             per_seed_metrics["l2"].append(row["l2_mean"])  # absolute
 
             # Storage cleanup: remove intermediate checkpoints, optimizer files, and TB logs
+            tqdm.write(f"[CLEANUP] Removing intermediate checkpoints for {vname} seed {seed}...")
             cleanup_run_artifacts(run_dir, keep_best=True, remove_tb=True)
 
         # Aggregate over seeds
@@ -559,6 +573,7 @@ def main():
                 "invalid_pct_ci": ci_inv,
                 "n_seeds": len(per_seed_metrics["succ"]),
             })
+            tqdm.write(f"\n[SUMMARY] {vname}: succ={m_succ:.2f}±{ci_succ:.2f}%, l2={m_l2:.4f}±{ci_l2:.4f}, invalid={m_inv:.2f}±{ci_inv:.2f}%\n")
 
     # Merge new results with existing results
     all_results = dict(existing_results)  # Start with existing
@@ -660,6 +675,7 @@ def main():
 
     # Markdown report
     report_md = args.base_outdir / "Ablation_Report.md"
+    entropy_str = f"entropy={FULL_BASE.get('--entropy_coef', 'N/A')}"
     open(report_md, "w").write(textwrap.dedent(f"""
         # Ablation Study Report
 
@@ -667,12 +683,20 @@ def main():
 
         **Training budget**: epochs={FULL_BASE['--epochs']}, steps_per_epoch={FULL_BASE['--steps_per_epoch']}, batch_size=1
 
-        **Full (ours)** key knobs: tau {FULL_BASE['--tau_success']}→{FULL_BASE['--tau_success_end']}, alpha_dist={FULL_BASE['--alpha_dist']}, entropy={FULL_BASE['--entropy_coef_start']}→{FULL_BASE['--entropy_coef_end']},
+        **Full (ours)** key knobs: tau={FULL_BASE['--tau_success']} (fixed at {FULL_BASE['--tau_success_end']}), alpha_dist={FULL_BASE['--alpha_dist']}, {entropy_str},
         KL (coef={FULL_BASE['--kl_coef']}, target={FULL_BASE['--target_kl']}), warmup={FULL_BASE['--warmup_steps']}, safety cooldown steps={FULL_BASE['--safety_cooldown_steps']}.
 
         See `summary.csv` and `ablation_table.tex` for final numbers (mean ± 95% CI over seeds={args.seeds}).
     """))
     print(f"[WRITE] {report_md}")
+    
+    print(f"\n{'='*80}")
+    print("✓ Ablation study complete!")
+    print(f"  Results saved to: {args.base_outdir}")
+    print(f"  Per-run CSV: {per_run_csv}")
+    print(f"  Summary CSV: {summary_csv}")
+    print(f"  LaTeX table: {args.base_outdir / 'ablation_table.tex'}")
+    print(f"{'='*80}\n")
 
 
 if __name__ == "__main__":
